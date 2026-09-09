@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -12,6 +13,7 @@ import (
 
 type Config struct {
 	ListenAddr     string
+	BasePath       string
 	EndpointsFile  string
 	DockerImage    string
 	RequestTimeout time.Duration
@@ -34,6 +36,10 @@ func Parse(lookup func(string) (string, bool)) (Config, error) {
 	if err != nil || portErr != nil || n < 1 || n > 65535 {
 		return c, fmt.Errorf("invalid LISTEN_ADDR")
 	}
+	c.BasePath, err = basePath(get("BASE_PATH", "/"))
+	if err != nil {
+		return c, err
+	}
 	if strings.TrimSpace(c.EndpointsFile) == "" || strings.TrimSpace(c.DockerImage) == "" {
 		return c, fmt.Errorf("ENDPOINTS_FILE and DOCKER_IMAGE must not be empty")
 	}
@@ -49,4 +55,23 @@ func Parse(lookup func(string) (string, bool)) (Config, error) {
 		return c, fmt.Errorf("invalid LOG_LEVEL")
 	}
 	return c, nil
+}
+
+func basePath(value string) (string, error) {
+	if value == "" || strings.TrimSpace(value) != value || !strings.HasPrefix(value, "/") || strings.ContainsAny(value, "?#\\%") {
+		return "", fmt.Errorf("invalid BASE_PATH")
+	}
+	if value != "/" {
+		value = strings.TrimSuffix(value, "/")
+	}
+	if path.Clean(value) != value {
+		return "", fmt.Errorf("invalid BASE_PATH")
+	}
+	for _, r := range value {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || strings.ContainsRune("/-._~", r) {
+			continue
+		}
+		return "", fmt.Errorf("invalid BASE_PATH")
+	}
+	return value, nil
 }

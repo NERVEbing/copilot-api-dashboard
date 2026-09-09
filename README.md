@@ -41,6 +41,7 @@ cp config/endpoints.example.yaml config/endpoints.yaml
 | 变量                                    | 默认值                                  |
 | --------------------------------------- | --------------------------------------- |
 | `COPILOT_API_DASHBOARD_LISTEN_ADDR`     | `:9000`                                 |
+| `COPILOT_API_DASHBOARD_BASE_PATH`       | `/`                                     |
 | `COPILOT_API_DASHBOARD_ENDPOINTS_FILE`  | `/config/endpoints.yaml`                |
 | `COPILOT_API_DASHBOARD_DOCKER_IMAGE`    | `ghcr.io/caozhiyuan/copilot-api:latest` |
 | `COPILOT_API_DASHBOARD_REQUEST_TIMEOUT` | `5s`                                    |

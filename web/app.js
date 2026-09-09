@@ -1,4 +1,5 @@
 const $ = (id) => document.getElementById(id);
+const appBaseURL = new URL(".", document.baseURI);
 const escapeHTML = (value) => String(value ?? "—").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 const numeric = (value) => typeof value === "number" && Number.isFinite(value);
 const number = (value) => numeric(value) ? value.toLocaleString("en-US", { maximumFractionDigits: 3 }) : "—";
@@ -197,7 +198,9 @@ async function request(path, query, signal) {
   const target = state.account || "Dashboard";
   const operation = path.split("/").pop();
   try {
-    const response = await fetch(`${path}?${query}`, { signal, cache: "no-store", credentials: "omit" });
+    const url = new URL(path, appBaseURL);
+    url.search = query.toString();
+    const response = await fetch(url, { signal, cache: "no-store", credentials: "omit" });
     let body;
     try { body = await response.json(); } catch {
       if (signal.aborted) throw new DOMException("Aborted", "AbortError");
@@ -222,7 +225,7 @@ async function loadEvents() {
   resetEvents("Loading events…");
   $("events").setAttribute("aria-busy", "true");
   try {
-    const result = await request("/api/v1/events", new URLSearchParams({ account: state.account, period: state.period, page: state.page, page_size: 20 }), controller.signal);
+    const result = await request("api/v1/events", new URLSearchParams({ account: state.account, period: state.period, page: state.page, page_size: 20 }), controller.signal);
     if (id !== refreshID || controller.signal.aborted) return;
     state.eventErrors = result.errors;
     renderEvents(result.data);
@@ -260,7 +263,7 @@ async function refresh() {
   const query = new URLSearchParams({ period: state.period });
   if (state.account) query.set("account", state.account);
   try {
-    const result = await request("/api/v1/dashboard", query, controller.signal);
+    const result = await request("api/v1/dashboard", query, controller.signal);
     if (id !== refreshID || controller.signal.aborted) return;
     state.dashboardErrors = result.errors;
     const found = renderDashboard(result.data);

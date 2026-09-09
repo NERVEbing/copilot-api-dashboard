@@ -37,7 +37,7 @@ func run() error {
 	up := upstream.New(cfg.RequestTimeout, cfg.MaxConcurrency)
 	defer up.Close()
 	service := &dashboard.Service{Discovery: &discovery.Discoverer{File: cfg.EndpointsFile, Image: cfg.DockerImage, Timeout: cfg.RequestTimeout, Docker: docker}, Upstream: up}
-	server := &http.Server{Addr: cfg.ListenAddr, Handler: httpserver.New(service), ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 60 * time.Second}
+	server := &http.Server{Addr: cfg.ListenAddr, Handler: httpserver.New(service, cfg.BasePath), ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 60 * time.Second}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	done := make(chan error, 1)

@@ -71,7 +71,7 @@ func params(r *http.Request, events bool) (string, string, int, int, string) {
 	return period, login, page, size, ""
 }
 
-func New(service *dashboard.Service) http.Handler {
+func New(service *dashboard.Service, basePath string) http.Handler {
 	assets := map[string]struct {
 		body        []byte
 		contentType string
@@ -92,8 +92,24 @@ func New(service *dashboard.Service) http.Handler {
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
-		_, asset := assets[r.URL.Path]
-		known := asset || r.URL.Path == "/healthz" || r.URL.Path == "/api/v1/dashboard" || r.URL.Path == "/api/v1/events"
+		requestPath := r.URL.Path
+		if basePath != "/" {
+			if requestPath == basePath {
+				target := basePath + "/"
+				if r.URL.RawQuery != "" {
+					target += "?" + r.URL.RawQuery
+				}
+				http.Redirect(w, r, target, http.StatusPermanentRedirect)
+				return
+			}
+			if !strings.HasPrefix(requestPath, basePath+"/") {
+				http.NotFound(w, r)
+				return
+			}
+			requestPath = strings.TrimPrefix(requestPath, basePath)
+		}
+		_, asset := assets[requestPath]
+		known := asset || requestPath == "/healthz" || requestPath == "/api/v1/dashboard" || requestPath == "/api/v1/events"
 		if !known {
 			http.NotFound(w, r)
 			return
@@ -103,21 +119,21 @@ func New(service *dashboard.Service) http.Handler {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		if a, ok := assets[r.URL.Path]; ok {
+		if a, ok := assets[requestPath]; ok {
 			w.Header().Set("Content-Type", a.contentType)
 			_, _ = w.Write(a.body)
 			return
 		}
-		if r.URL.Path == "/healthz" {
+		if requestPath == "/healthz" {
 			writeJSON(w, 200, map[string]bool{"ok": true})
 			return
 		}
-		period, login, page, size, err := params(r, r.URL.Path == "/api/v1/events")
+		period, login, page, size, err := params(r, requestPath == "/api/v1/events")
 		if err != "" {
 			invalid(w, err)
 			return
 		}
-		if r.URL.Path == "/api/v1/events" {
+		if requestPath == "/api/v1/events" {
 			result, status := service.Events(r.Context(), login, period, page, size)
 			writeJSON(w, status, result)
 			return

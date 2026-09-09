@@ -25,7 +25,7 @@ func (noDiscovery) Discover(context.Context) ([]discovery.Endpoint, []discovery.
 func TestRoutesAndValidation(t *testing.T) {
 	c := upstream.New(time.Second, 2)
 	defer c.Close()
-	h := New(&dashboard.Service{Discovery: noDiscovery{}, Upstream: c})
+	h := New(&dashboard.Service{Discovery: noDiscovery{}, Upstream: c}, "/")
 	for _, tc := range []struct {
 		path    string
 		status  int
@@ -105,7 +105,7 @@ func TestHTTPVerticalSlice(t *testing.T) {
 	d := &discovery.Discoverer{File: file, Timeout: time.Second, SocketExists: func() (bool, error) { return false, nil }, LookupEnv: func(key string) (string, bool) { return "private-test-key", key == "TEST_KEY" }}
 	c := upstream.New(time.Second, 2)
 	defer c.Close()
-	srv := httptest.NewServer(New(&dashboard.Service{Discovery: d, Upstream: c}))
+	srv := httptest.NewServer(New(&dashboard.Service{Discovery: d, Upstream: c}, "/"))
 	defer srv.Close()
 	res, err := http.Get(srv.URL + "/api/v1/dashboard")
 	if err != nil {
@@ -142,5 +142,43 @@ func TestHTTPVerticalSlice(t *testing.T) {
 	}
 	if res2.StatusCode != 200 || events.Data.Page != 2 || events.Data.PageSize != 1 || events.Data.Items[0].Cost.Nanos != 123 || len(events.Errors) != 1 {
 		t.Fatalf("events: %+v", events)
+	}
+}
+
+func TestBasePathRoutes(t *testing.T) {
+	c := upstream.New(time.Second, 2)
+	defer c.Close()
+	h := New(&dashboard.Service{Discovery: noDiscovery{}, Upstream: c}, "/copilot-dashboard")
+
+	for _, tc := range []struct {
+		path    string
+		status  int
+		content string
+	}{
+		{"/", 404, "text/plain"},
+		{"/app.js", 404, "text/plain"},
+		{"/api/v1/dashboard", 404, "text/plain"},
+		{"/copilot-dashboard/", 200, "text/html"},
+		{"/copilot-dashboard/app.js", 200, "text/javascript"},
+		{"/copilot-dashboard/styles.css", 200, "text/css"},
+		{"/copilot-dashboard/healthz", 200, "application/json"},
+		{"/copilot-dashboard/api/v1/dashboard", 200, "application/json"},
+		{"/copilot-dashboard/unknown", 404, "text/plain"},
+	} {
+		t.Run(tc.path, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, tc.path, nil))
+			if w.Code != tc.status || !strings.HasPrefix(w.Header().Get("Content-Type"), tc.content) {
+				t.Fatalf("response %d %s", w.Code, w.Body.String())
+			}
+			if tc.path == "/copilot-dashboard/" && (!strings.Contains(w.Body.String(), `href="./styles.css"`) || !strings.Contains(w.Body.String(), `src="./app.js"`)) {
+				t.Fatalf("HTML assets are not base-path relative: %s", w.Body.String())
+			}
+		})
+	}
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/copilot-dashboard?period=today", nil))
+	if w.Code != http.StatusPermanentRedirect || w.Header().Get("Location") != "/copilot-dashboard/?period=today" {
+		t.Fatalf("base path redirect: %d %q", w.Code, w.Header().Get("Location"))
 	}
 }

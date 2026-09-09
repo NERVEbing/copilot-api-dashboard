@@ -3,7 +3,7 @@ const { readFileSync } = require("node:fs");
 const { test } = require("node:test");
 const vm = require("node:vm");
 
-function app() {
+function app(baseURI = "http://localhost/") {
   const elements = new Map();
   const element = (id) => {
     if (!elements.has(id)) elements.set(id, {
@@ -14,14 +14,19 @@ function app() {
     return elements.get(id);
   };
   const context = vm.createContext({
-    document: { getElementById: element },
+    document: { baseURI, getElementById: element },
     ResizeObserver: class { observe() {} },
-    AbortController, URLSearchParams, Intl,
+    AbortController, URL, URLSearchParams, Intl,
     fetch: () => new Promise(() => {}),
   });
   vm.runInContext(readFileSync(`${__dirname}/app.js`, "utf8"), context);
   return { run: (code) => vm.runInContext(code, context), element };
 }
+
+test("API URLs follow the document base path", () => {
+  const { run } = app("https://example.test/copilot-dashboard/");
+  assert.equal(run("new URL('api/v1/dashboard', appBaseURL).pathname"), "/copilot-dashboard/api/v1/dashboard");
+});
 
 test("compact tokens handle unit boundaries", () => {
   const { run } = app();
