@@ -1,0 +1,7 @@
+endpoints:
+  - name: copilot-api-account-a
+    url: http://copilot-api-account-a:4141
+    api_key_env: COPILOT_API_ACCOUNT_A_KEY
+  - name: copilot-api-account-b
+    url: http://copilot-api-account-b:4141
+    api_key_env: COPILOT_API_ACCOUNT_B_KEY

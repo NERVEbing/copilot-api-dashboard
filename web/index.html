@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Copilot API Dashboard</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <a class="skip-link" href="#content">Skip to usage</a>
+  <header class="topbar">
+    <div class="shell">
+      <h1>Copilot API Dashboard</h1>
+      <p class="subtitle">Usage and quotas</p>
+    </div>
+  </header>
+  <main class="shell">
+    <form id="controls" class="controls">
+      <div><label for="account">Account</label><select id="account" name="account"><option value="">All accounts</option></select></div>
+      <div><label for="period">Period</label><select id="period" name="period">
+        <option value="today">Today</option><option value="this_week">This week</option>
+        <option value="last_7_days">Last 7 days</option><option value="this_month">This month</option>
+        <option value="last_30_days" selected>Last 30 days</option><option value="lifetime">Lifetime</option>
+      </select></div>
+      <button class="primary" type="submit" id="refresh">Refresh</button>
+    </form>
+    <p id="announcement" class="sr-only" role="status" aria-live="polite"></p>
+    <div id="content" tabindex="-1" aria-busy="true">
+      <section id="identity" aria-label="Account details" hidden></section>
+      <section id="quotas" class="quota-grid" aria-label="Account quotas" hidden></section>
+      <section aria-labelledby="summary-title"><h2 id="summary-title">Usage summary</h2><div id="metrics" class="metrics"><p class="empty">Loading usage…</p></div></section>
+      <section id="trend-section" class="panel" aria-labelledby="trend-title"><div class="panel-header"><h2 id="trend-title">Daily usage</h2><span class="muted">Total tokens</span></div><div id="trend"><p class="empty">Loading daily usage…</p></div></section>
+      <section class="panel" aria-labelledby="models-title"><div class="panel-header"><h2 id="models-title">Model breakdown</h2></div><div id="models"><p class="empty">Loading models…</p></div></section>
+      <section id="accounts-section" class="panel" aria-labelledby="accounts-title"><div class="panel-header"><h2 id="accounts-title">Accounts</h2></div><div id="accounts"><p class="empty">Loading accounts…</p></div></section>
+    </div>
+    <section id="events-section" class="panel" aria-labelledby="events-title" hidden>
+      <div class="panel-header"><h2 id="events-title">Request events</h2><span class="muted" id="events-count"></span></div>
+      <div id="events" aria-busy="false"></div>
+      <nav class="pagination" aria-label="Event pagination"><span id="page-label" aria-live="polite"></span><div><button type="button" id="previous" disabled>Previous</button><button type="button" id="next" disabled>Next</button></div></nav>
+    </section>
+    <section id="errors-section" class="panel errors" aria-labelledby="errors-title" hidden><div class="panel-header"><h2 id="errors-title">Failed requests</h2></div><div id="errors"></div></section>
+    <noscript><p class="empty">Enable JavaScript to view usage.</p></noscript>
+  </main>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

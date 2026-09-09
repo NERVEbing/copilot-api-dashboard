@@ -1,0 +1,13 @@
+**
+!Dockerfile
+!go.mod
+!go.sum
+!cmd/
+!cmd/**
+!internal/
+!internal/**
+!web/
+!web/index.html
+!web/app.js
+!web/styles.css
+!web/embed.go

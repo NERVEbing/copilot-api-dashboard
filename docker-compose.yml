@@ -1,0 +1,26 @@
+networks:
+  copilot:
+    external: true
+    name: service
+
+services:
+  copilot-api-dashboard:
+    build: .
+    image: copilot-api-dashboard:local
+    container_name: copilot-api-dashboard
+    networks:
+      - copilot
+    environment:
+      COPILOT_API_DASHBOARD_LISTEN_ADDR: ":9000"
+      COPILOT_API_DASHBOARD_ENDPOINTS_FILE: /config/endpoints.yaml
+      COPILOT_API_DASHBOARD_DOCKER_IMAGE: ghcr.io/caozhiyuan/copilot-api:latest
+      COPILOT_API_DASHBOARD_REQUEST_TIMEOUT: 5s
+      COPILOT_API_DASHBOARD_MAX_CONCURRENCY: "32"
+      COPILOT_API_DASHBOARD_LOG_LEVEL: info
+      # For YAML credentials, also pass each referenced variable, for example:
+      # COPILOT_API_ACCOUNT_A_KEY: ${COPILOT_API_ACCOUNT_A_KEY:?Set the endpoint key}
+    ports:
+      - "127.0.0.1:9000:9000"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      # - ./config/endpoints.yaml:/config/endpoints.yaml:ro
