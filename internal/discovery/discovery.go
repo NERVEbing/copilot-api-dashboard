@@ -116,7 +116,7 @@ func LoadYAML(path string, lookup func(string) (string, bool)) ([]Endpoint, erro
 	if err != nil {
 		return nil, errors.New("cannot read endpoint file")
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	var doc struct {
 		Endpoints []struct {
 			Name   string  `yaml:"name"`

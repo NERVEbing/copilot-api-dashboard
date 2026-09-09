@@ -37,7 +37,8 @@ func params(r *http.Request, events bool) (string, string, int, int, string) {
 		if len(values) != 1 {
 			return "", "", 0, 0, "query parameters must occur once"
 		}
-		if key != "period" && key != "account" && !(events && (key == "page" || key == "page_size")) {
+		pagination := events && (key == "page" || key == "page_size")
+		if key != "period" && key != "account" && !pagination {
 			return "", "", 0, 0, "unknown query parameter"
 		}
 	}
@@ -99,7 +100,7 @@ func New(service *dashboard.Service) http.Handler {
 		}
 		if r.Method != http.MethodGet {
 			w.Header().Set("Allow", "GET")
-			http.Error(w, "method not allowed", 405)
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
 		if a, ok := assets[r.URL.Path]; ok {

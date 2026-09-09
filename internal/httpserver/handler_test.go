@@ -111,7 +111,11 @@ func TestHTTPVerticalSlice(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer res.Body.Close()
+	defer func() {
+		if err := res.Body.Close(); err != nil {
+			t.Errorf("close dashboard response body: %v", err)
+		}
+	}()
 	var out dashboard.Response
 	if err := json.NewDecoder(res.Body).Decode(&out); err != nil {
 		t.Fatal(err)
@@ -127,7 +131,11 @@ func TestHTTPVerticalSlice(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer res2.Body.Close()
+	defer func() {
+		if err := res2.Body.Close(); err != nil {
+			t.Errorf("close events response body: %v", err)
+		}
+	}()
 	var events dashboard.EventsResponse
 	if err := json.NewDecoder(res2.Body).Decode(&events); err != nil {
 		t.Fatal(err)

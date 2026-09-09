@@ -57,7 +57,7 @@ func (c *Client) get(ctx context.Context, e discovery.Endpoint, path string, que
 	if err != nil {
 		return errors.New(discovery.SafeMessage(err))
 	}
-	defer res.Body.Close()
+	defer func() { _ = res.Body.Close() }()
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
 		return fmt.Errorf("upstream returned HTTP %d", res.StatusCode)
 	}

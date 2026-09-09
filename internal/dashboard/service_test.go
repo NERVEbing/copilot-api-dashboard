@@ -35,7 +35,7 @@ func testTarget(t *testing.T, login string, tokens int64, fail string) *target {
 		v.calls[r.URL.Path]++
 		v.mu.Unlock()
 		if r.URL.Path == fail {
-			http.Error(w, "private upstream body", 503)
+			http.Error(w, "private upstream body", http.StatusServiceUnavailable)
 			return
 		}
 		period := r.URL.Query().Get("period")

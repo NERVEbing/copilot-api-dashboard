@@ -10,12 +10,13 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/moby/moby/client"
+
 	"github.com/NERVEbing/copilot-api-dashboard/internal/config"
 	"github.com/NERVEbing/copilot-api-dashboard/internal/dashboard"
 	"github.com/NERVEbing/copilot-api-dashboard/internal/discovery"
 	"github.com/NERVEbing/copilot-api-dashboard/internal/httpserver"
 	"github.com/NERVEbing/copilot-api-dashboard/internal/upstream"
-	"github.com/moby/moby/client"
 )
 
 func run() error {
@@ -28,7 +29,11 @@ func run() error {
 	if err != nil {
 		return errors.New("cannot initialize Docker client")
 	}
-	defer docker.Close()
+	defer func() {
+		if err := docker.Close(); err != nil {
+			slog.Warn("Failed to close Docker client", "error", err)
+		}
+	}()
 	up := upstream.New(cfg.RequestTimeout, cfg.MaxConcurrency)
 	defer up.Close()
 	service := &dashboard.Service{Discovery: &discovery.Discoverer{File: cfg.EndpointsFile, Image: cfg.DockerImage, Timeout: cfg.RequestTimeout, Docker: docker}, Upstream: up}

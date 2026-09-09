@@ -52,10 +52,11 @@ cp config/endpoints.example.yaml config/endpoints.yaml
 需要 Go 1.26 或更高版本。前端资源已嵌入 Go 程序，无需额外安装前端依赖。
 
 ```sh
-go test ./...
-go vet ./...
-go run ./cmd/dashboard
+make check
+make run
 ```
+
+也可以分别执行 `make fmt`、`make fmt-check`、`make lint`、`make test`、`make vet` 和 `make build`。
 
 前端测试：
 
