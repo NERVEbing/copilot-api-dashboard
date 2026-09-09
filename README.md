@@ -2,6 +2,16 @@
 
 一个面向 [Copilot API](https://github.com/caozhiyuan/copilot-api) 的多容器、多账号用量面板。
 
+<p align="center">
+  <a href="docs/images/dashboard-overview.png">
+    <img
+      src="docs/images/dashboard-overview.png"
+      alt="Copilot API Dashboard 界面预览"
+      height="600"
+    />
+  </a>
+</p>
+
 ## 功能
 
 - 汇总或按账号查看配额、Token、请求数与费用
