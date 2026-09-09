@@ -15,7 +15,7 @@ let eventsController;
 let refreshID = 0;
 let chartDays = null;
 const tableViews = new Map();
-const sorts = { accounts: { column: 0, direction: 1 }, models: { column: 5, direction: -1 }, days: { column: 0, direction: 1 } };
+const sorts = { accounts: { column: 2, direction: -1 }, models: { column: 5, direction: -1 }, days: { column: 0, direction: 1 } };
 
 function money(costs) {
   if (!Array.isArray(costs) || costs.length === 0) return "—";
@@ -27,14 +27,25 @@ function money(costs) {
   }).join("");
 }
 
-function table(label, headers, rows, sortID, disabledCost = false) {
+function headerCell(label, index, sortID, disabledCost, className = "", attributes = "") {
   const sort = sorts[sortID];
-  return `<div class="table-scroll"${sortID ? ` data-table="${sortID}"` : ""} tabindex="0" role="region" aria-label="${escapeHTML(label)}"><table><caption class="sr-only">${escapeHTML(label)}</caption><thead><tr>${headers.map((h, i) => {
-    const disabled = h === "Cost" && disabledCost;
-    const active = sort && !disabled && sort.column === i;
-    const content = sort ? `<button type="button" class="sort" data-sort="${sortID}" data-column="${i}"${disabled ? ' disabled title="Cost sorting requires a single currency"' : ""}>${escapeHTML(h)} <span aria-hidden="true">${disabled ? "" : active ? sort.direction === 1 ? "↑" : "↓" : "↕"}</span></button>` : escapeHTML(h);
-    return `<th scope="col"${sort ? ` aria-sort="${active ? sort.direction === 1 ? "ascending" : "descending" : "none"}"` : ""}${i && !["Model", "Source", "Target", "Operation", "Error"].includes(h) ? ' class="number"' : ""}>${content}</th>`;
-  }).join("")}</tr></thead><tbody>${rows.join("")}</tbody></table></div>`;
+  const disabled = label === "Cost" && disabledCost;
+  const active = sort && !disabled && sort.column === index;
+  const content = sort ? `<button type="button" class="sort" data-sort="${sortID}" data-column="${index}"${disabled ? ' disabled title="Cost sorting requires a single currency"' : ""}>${escapeHTML(label)} <span aria-hidden="true">${disabled ? "" : active ? sort.direction === 1 ? "↑" : "↓" : "↕"}</span></button>` : escapeHTML(label);
+  return `<th scope="col"${attributes}${sort ? ` aria-sort="${active ? sort.direction === 1 ? "ascending" : "descending" : "none"}"` : ""}${className ? ` class="${className}"` : ""}>${content}</th>`;
+}
+
+function table(label, headers, rows, sortID, disabledCost = false) {
+  const cells = headers.map((header, index) => headerCell(header, index, sortID, disabledCost, index && !["Model", "Source", "Target", "Operation", "Error"].includes(header) ? "number" : "")).join("");
+  return `<div class="table-scroll"${sortID ? ` data-table="${sortID}"` : ""} tabindex="0" role="region" aria-label="${escapeHTML(label)}"><table><caption class="sr-only">${escapeHTML(label)}</caption><thead><tr>${cells}</tr></thead><tbody>${rows.join("")}</tbody></table></div>`;
+}
+
+function accountsTable(label, rows, disabledCost) {
+  const cell = (header, index, attributes = "", className = "number") => headerCell(header, index, "accounts", disabledCost, className, attributes);
+  return `<div class="table-scroll" data-table="accounts" tabindex="0" role="region" aria-label="${escapeHTML(label)}"><table><caption class="sr-only">${escapeHTML(label)}</caption><thead>
+    <tr>${cell("Account", 0, ' rowspan="2"', "")}${cell("Plan", 1, ' rowspan="2"', "")}<th scope="colgroup" colspan="4" class="quota-group">Premium quota</th>${cell("Tokens", 6, ' rowspan="2"')}${cell("Requests", 7, ' rowspan="2"')}${cell("Cost", 8, ' rowspan="2"')}</tr>
+    <tr>${cell("Used %", 2)}${cell("Used", 3)}${cell("Remaining", 4)}${cell("Total", 5)}</tr>
+  </thead><tbody>${rows.join("")}</tbody></table></div>`;
 }
 
 function sortableTable(id, label, headers, items, getters, renderRow, costs) {
@@ -51,7 +62,8 @@ function sortableTable(id, label, headers, items, getters, renderRow, costs) {
       if (missing(av) || missing(bv)) return Number(missing(av)) - Number(missing(bv)) || compare(getters[0](a), getters[0](b));
       return compare(av, bv) * sort.direction || compare(getters[0](a), getters[0](b));
     });
-    return table(label, headers, sorted.map(renderRow), id, disabledCost);
+    const rows = sorted.map(renderRow);
+    return id === "accounts" ? accountsTable(label, rows, disabledCost) : table(label, headers, rows, id, disabledCost);
   };
   tableViews.set(id, view);
   return view();
@@ -63,6 +75,13 @@ function costValue(costs) {
 
 function usedValue(quota) {
   return quota?.unlimited === false && numeric(quota.entitlement) && numeric(quota.remaining) ? quota.entitlement - quota.remaining : null;
+}
+
+function usedPercentValue(quota) {
+  if (quota?.unlimited !== false) return null;
+  if (numeric(quota.percent_remaining)) return 100 - quota.percent_remaining;
+  const used = usedValue(quota);
+  return numeric(used) && numeric(quota.entitlement) && quota.entitlement > 0 ? used / quota.entitlement * 100 : null;
 }
 
 function metric(label, value) {
@@ -81,6 +100,15 @@ function quotaRemaining(quota) {
 
 function quotaTotal(quota) {
   return quota?.unlimited === true ? "Unlimited" : number(quota?.entitlement);
+}
+
+function quotaUsage(quota) {
+  if (quota?.unlimited === true) return '<span class="unlimited">Unlimited</span>';
+  const usedPercent = usedPercentValue(quota);
+  if (!numeric(usedPercent)) return "—";
+  const display = `${percent(usedPercent)}%`;
+  const progress = Math.min(100, Math.max(0, usedPercent));
+  return `<span class="quota-usage${usedPercent >= 100 ? " exhausted" : ""}"><strong>${display}</strong><progress value="${progress}" max="100" aria-label="${display} used"></progress></span>`;
 }
 
 function renderQuotas(account) {
@@ -135,9 +163,9 @@ function renderModels(models) {
 
 function renderAccounts(accounts) {
   if (!accounts.length) { $("accounts").innerHTML = empty("No accounts available."); return; }
-  $("accounts").innerHTML = sortableTable("accounts", "Account usage", ["Account", "Plan", "Premium used", "Premium remaining", "Premium total", "Tokens", "Requests", "Cost"], accounts,
-    [(a) => a.login, (a) => a.copilot_plan, (a) => usedValue(a.quota_snapshots?.premium_interactions), (a) => a.quota_snapshots?.premium_interactions?.unlimited ? Infinity : a.quota_snapshots?.premium_interactions?.remaining, (a) => a.quota_snapshots?.premium_interactions?.unlimited === true ? Infinity : a.quota_snapshots?.premium_interactions?.entitlement, (a) => a.totals?.total_tokens, (a) => a.totals?.request_count, (a) => costValue(a.totals?.costs)],
-    (a) => `<tr><td class="text-cell">${escapeHTML(a.login)}</td><td class="number">${escapeHTML(a.copilot_plan)}</td><td class="number">${quotaUsed(a.quota_snapshots?.premium_interactions)}</td><td class="number">${quotaRemaining(a.quota_snapshots?.premium_interactions)}</td><td class="number">${quotaTotal(a.quota_snapshots?.premium_interactions)}</td><td class="number">${tokens(a.totals?.total_tokens)}</td><td class="number">${number(a.totals?.request_count)}</td><td class="number">${money(a.totals?.costs)}</td></tr>`, (a) => a.totals?.costs);
+  $("accounts").innerHTML = sortableTable("accounts", "Account usage", ["Account", "Plan", "Used %", "Used", "Remaining", "Total", "Tokens", "Requests", "Cost"], accounts,
+    [(a) => a.login, (a) => a.copilot_plan, (a) => usedPercentValue(a.quota_snapshots?.premium_interactions), (a) => usedValue(a.quota_snapshots?.premium_interactions), (a) => a.quota_snapshots?.premium_interactions?.unlimited === false ? a.quota_snapshots.premium_interactions.remaining : null, (a) => a.quota_snapshots?.premium_interactions?.unlimited === false ? a.quota_snapshots.premium_interactions.entitlement : null, (a) => a.totals?.total_tokens, (a) => a.totals?.request_count, (a) => costValue(a.totals?.costs)],
+    (a) => `<tr><td class="text-cell">${escapeHTML(a.login)}</td><td>${escapeHTML(a.copilot_plan)}</td><td class="number">${quotaUsage(a.quota_snapshots?.premium_interactions)}</td><td class="number">${quotaUsed(a.quota_snapshots?.premium_interactions)}</td><td class="number">${quotaRemaining(a.quota_snapshots?.premium_interactions)}</td><td class="number">${quotaTotal(a.quota_snapshots?.premium_interactions)}</td><td class="number">${tokens(a.totals?.total_tokens)}</td><td class="number">${number(a.totals?.request_count)}</td><td class="number">${money(a.totals?.costs)}</td></tr>`, (a) => a.totals?.costs);
 }
 
 function renderErrors() {

@@ -63,17 +63,22 @@ test("numeric sorting uses original values, keeps missing last, and does not mut
   assert.ok(element("models").innerHTML.includes('aria-sort="ascending"'));
 });
 
-test("account quotas sort finite, unlimited and missing values", () => {
+test("account quota usage percentage is visual, grouped and sorted descending by default", () => {
   const { run, element } = app();
   run(`const accounts = [
     {login:'Missing'},
     {login:'Unlimited',quota_snapshots:{premium_interactions:{unlimited:true}}},
-    {login:'Finite',quota_snapshots:{premium_interactions:{unlimited:false,remaining:50,entitlement:300}}}
-  ]; sorts.accounts = {column:3,direction:1}; renderAccounts(accounts);`);
+    {login:'AbsoluteHigh',quota_snapshots:{premium_interactions:{unlimited:false,remaining:800,entitlement:1000}}},
+    {login:'PercentHigh',quota_snapshots:{premium_interactions:{unlimited:false,remaining:10,entitlement:100,percent_remaining:10}}},
+    {login:'RemainingLow',quota_snapshots:{premium_interactions:{unlimited:false,remaining:1,entitlement:300}}}
+  ]; renderAccounts(accounts);`);
   const names = () => [...element("accounts").innerHTML.matchAll(/class="text-cell">([^<]+)/g)].map((match) => match[1]);
-  assert.deepEqual(names(), ["Finite", "Unlimited", "Missing"]);
-  run("sorts.accounts.direction = -1; renderAccounts(accounts)");
-  assert.deepEqual(names(), ["Unlimited", "Finite", "Missing"]);
+  assert.deepEqual(names(), ["RemainingLow", "PercentHigh", "AbsoluteHigh", "Missing", "Unlimited"]);
+  assert.ok(element("accounts").innerHTML.includes('scope="colgroup" colspan="4" class="quota-group">Premium quota'));
+  assert.ok(element("accounts").innerHTML.includes('<strong>90%</strong><progress value="90" max="100" aria-label="90% used">'));
+  assert.ok(element("accounts").innerHTML.includes('<span class="unlimited">Unlimited</span>'));
+  assert.ok(run("quotaUsage({unlimited:false,percent_remaining:-4.2})").includes('class="quota-usage exhausted"><strong>104.2%</strong><progress value="100"'));
+  assert.equal(run("usedPercentValue({unlimited:false,entitlement:0,remaining:0})"), null);
 });
 
 test("cost sorting permits a single currency and resets when currencies become incomparable", () => {
@@ -88,22 +93,24 @@ test("cost sorting permits a single currency and resets when currencies become i
   assert.equal(run("sorts.models.column"), 0);
 });
 
-test("premium total displays entitlement and sorts zero, finite, unlimited and missing quotas", () => {
+test("account quota absolute values remain independently sortable", () => {
   const { run, element } = app();
   run(`const accounts = [
     {login:'Missing'},
-    {login:'Unlimited',quota_snapshots:{premium_interactions:{unlimited:true,entitlement:0}}},
-    {login:'Large',quota_snapshots:{premium_interactions:{unlimited:false,entitlement:30000,remaining:2}}},
-    {login:'Small',quota_snapshots:{premium_interactions:{unlimited:false,entitlement:300,remaining:200}}},
-    {login:'Zero',quota_snapshots:{premium_interactions:{unlimited:false,entitlement:0,remaining:0}}}
-  ]; sorts.accounts = {column:4,direction:1}; renderAccounts(accounts);`);
+    {login:'Unlimited',quota_snapshots:{premium_interactions:{unlimited:true}}},
+    {login:'AbsoluteHigh',quota_snapshots:{premium_interactions:{unlimited:false,remaining:800,entitlement:1000}}},
+    {login:'PercentHigh',quota_snapshots:{premium_interactions:{unlimited:false,remaining:10,entitlement:100}}},
+    {login:'RemainingLow',quota_snapshots:{premium_interactions:{unlimited:false,remaining:1,entitlement:300}}}
+  ]; sorts.accounts = {column:3,direction:-1}; renderAccounts(accounts);`);
   const names = () => [...element("accounts").innerHTML.matchAll(/class="text-cell">([^<]+)/g)].map((match) => match[1]);
-  assert.deepEqual(names(), ["Zero", "Small", "Large", "Unlimited", "Missing"]);
-  assert.ok(element("accounts").innerHTML.includes('>30,000</td>'));
+  assert.deepEqual(names(), ["RemainingLow", "AbsoluteHigh", "PercentHigh", "Missing", "Unlimited"]);
+  run("sorts.accounts = {column:4,direction:1}; renderAccounts(accounts)");
+  assert.deepEqual(names(), ["RemainingLow", "PercentHigh", "AbsoluteHigh", "Missing", "Unlimited"]);
+  run("sorts.accounts = {column:5,direction:-1}; renderAccounts(accounts)");
+  assert.deepEqual(names(), ["AbsoluteHigh", "RemainingLow", "PercentHigh", "Missing", "Unlimited"]);
+  assert.ok(element("accounts").innerHTML.includes('>1,000</td>'));
   assert.equal(run("quotaTotal(accounts[1].quota_snapshots.premium_interactions)"), "Unlimited");
   assert.equal(run("quotaTotal(null)"), "—");
-  run("sorts.accounts.direction = -1; state.period = 'today'; renderAccounts(accounts)");
-  assert.deepEqual(names(), ["Unlimited", "Large", "Small", "Zero", "Missing"]);
 });
 
 test("Today hides daily usage, other periods restore it, and table sorting leaves chart chronological", () => {
