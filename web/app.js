@@ -106,9 +106,10 @@ function quotaUsage(quota) {
   if (quota?.unlimited === true) return '<span class="unlimited">Unlimited</span>';
   const usedPercent = usedPercentValue(quota);
   if (!numeric(usedPercent)) return "—";
-  const display = `${percent(usedPercent)}%`;
-  const progress = Math.min(100, Math.max(0, usedPercent));
-  return `<span class="quota-usage${usedPercent >= 100 ? " exhausted" : ""}"><strong>${display}</strong><progress value="${progress}" max="100" aria-label="${display} used"></progress></span>`;
+  const rounded = Math.round(usedPercent * 10) / 10;
+  const display = `${percent(rounded)}%`;
+  const progress = Math.min(100, Math.max(0, rounded));
+  return `<span class="quota-usage${rounded >= 100 ? " exhausted" : ""}"><progress value="${progress}" max="100" aria-label="${display} used"></progress><span class="quota-usage-value">${display}</span></span>`;
 }
 
 function renderQuotas(account) {

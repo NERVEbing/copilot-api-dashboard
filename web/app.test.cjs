@@ -75,9 +75,9 @@ test("account quota usage percentage is visual, grouped and sorted descending by
   const names = () => [...element("accounts").innerHTML.matchAll(/class="text-cell">([^<]+)/g)].map((match) => match[1]);
   assert.deepEqual(names(), ["RemainingLow", "PercentHigh", "AbsoluteHigh", "Missing", "Unlimited"]);
   assert.ok(element("accounts").innerHTML.includes('scope="colgroup" colspan="4" class="quota-group">Premium quota'));
-  assert.ok(element("accounts").innerHTML.includes('<strong>90%</strong><progress value="90" max="100" aria-label="90% used">'));
+  assert.ok(element("accounts").innerHTML.includes('<progress value="90" max="100" aria-label="90% used"></progress><span class="quota-usage-value">90%</span>'));
   assert.ok(element("accounts").innerHTML.includes('<span class="unlimited">Unlimited</span>'));
-  assert.ok(run("quotaUsage({unlimited:false,percent_remaining:-4.2})").includes('class="quota-usage exhausted"><strong>104.2%</strong><progress value="100"'));
+  assert.ok(run("quotaUsage({unlimited:false,percent_remaining:-4.2})").includes('class="quota-usage exhausted"><progress value="100" max="100" aria-label="104.2% used"></progress><span class="quota-usage-value">104.2%</span>'));
   assert.equal(run("usedPercentValue({unlimited:false,entitlement:0,remaining:0})"), null);
 });
 
