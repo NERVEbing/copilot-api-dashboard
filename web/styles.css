@@ -71,6 +71,8 @@ th[aria-sort="ascending"], th[aria-sort="descending"] { color: var(--green); }
 .chart .line { fill: none; stroke: var(--green); stroke-width: 2; vector-effect: non-scaling-stroke; }
 .chart .area { fill: #daf2df; opacity: .65; }
 .chart circle { fill: var(--green); }
+.chart-note { color: var(--muted); font-size: 12px; margin: 4px 0 0; }
+.not-recorded { color: var(--muted); font-size: 11px; margin-left: 6px; }
 .chart-details { border-top: 1px solid var(--border); }
 .chart-details > summary { cursor: pointer; color: var(--muted); font-size: 12px; padding: 12px 16px; }
 .pagination { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 16px; border-top: 1px solid var(--border); color: var(--muted); font-size: 12px; }

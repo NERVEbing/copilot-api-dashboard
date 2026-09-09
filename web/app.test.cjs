@@ -152,3 +152,17 @@ test("Today hides daily usage, other periods restore it, and table sorting leave
   run("renderTrend(null)");
   assert.ok(element("trend").innerHTML.includes("—"));
 });
+
+test("daily usage identifies zero-filled dates without changing their displayed values", () => {
+  const { run, element } = app();
+  run(`state.period = 'last_7_days'; renderTrend([
+    {date:'2026-09-08',recorded:false,totals:{total_tokens:0,request_count:0,costs:[]}},
+    {date:'2026-09-09',recorded:true,totals:{total_tokens:200,request_count:1,costs:[]}}
+  ])`);
+  assert.ok(element("trend").innerHTML.includes("Dates without recorded usage are shown as zero."));
+  assert.ok(element("trend").innerHTML.includes("2026-09-08: No recorded usage"));
+  assert.ok(element("trend").innerHTML.includes('<td>2026-09-08 <span class="not-recorded">Not recorded</span></td><td class="number">0</td><td class="number">0</td>'));
+  run(`renderTrend([{date:'2026-09-09',recorded:true,totals:{total_tokens:200}}])`);
+  assert.ok(!element("trend").innerHTML.includes("Dates without recorded usage"));
+  assert.ok(!element("trend").innerHTML.includes("Not recorded"));
+});

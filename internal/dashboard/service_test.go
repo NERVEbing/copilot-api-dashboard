@@ -206,6 +206,57 @@ func TestCurrencyAndNullableAIUAggregation(t *testing.T) {
 	}
 }
 
+func TestFillDaysUsesPeriodBoundariesAndPreservesRecordedValues(t *testing.T) {
+	now := time.Date(2026, 9, 9, 12, 0, 0, 0, time.Local)
+	recorded := Day{Date: "2026-09-09", Recorded: true, Totals: upstream.Totals{Tokens: 10}, Models: []upstream.Model{}}
+	tests := []struct {
+		name, period, first string
+		days                []Day
+		length              int
+	}{
+		{name: "last seven", period: "last_7_days", first: "2026-09-03", days: []Day{recorded}, length: 7},
+		{name: "last thirty empty", period: "last_30_days", first: "2026-08-11", days: []Day{}, length: 30},
+		{name: "this week", period: "this_week", first: "2026-09-07", days: []Day{recorded}, length: 3},
+		{name: "this month", period: "this_month", first: "2026-09-01", days: []Day{recorded}, length: 9},
+		{name: "lifetime minimum", period: "lifetime", first: "2026-09-03", days: []Day{recorded}, length: 7},
+		{name: "lifetime history", period: "lifetime", first: "2026-08-01", days: []Day{{Date: "2026-08-01", Recorded: true}}, length: 40},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := fillDays(test.days, test.period, now)
+			if len(got) != test.length || got[0].Date != test.first || got[len(got)-1].Date != "2026-09-09" {
+				t.Fatalf("filled days: %+v", got)
+			}
+			if len(test.days) > 0 {
+				recordedPreserved := false
+				for _, day := range got {
+					if day.Date == test.days[0].Date && day.Recorded == test.days[0].Recorded && day.Totals.Tokens == test.days[0].Totals.Tokens {
+						recordedPreserved = true
+					}
+				}
+				if !recordedPreserved {
+					t.Fatal("recorded day replaced by placeholder")
+				}
+			}
+			for _, day := range got {
+				if !day.Recorded && (day.Totals.Tokens != 0 || day.Totals.Requests != 0 || day.Totals.Costs == nil || day.Models == nil) {
+					t.Fatalf("invalid placeholder: %+v", day)
+				}
+			}
+		})
+	}
+	if got := fillDays([]Day{}, "lifetime", now); len(got) != 0 {
+		t.Fatalf("empty lifetime filled: %+v", got)
+	}
+	ancient := Day{Date: "0001-01-01", Recorded: true, Totals: upstream.Totals{Tokens: 1}, Models: []upstream.Model{}}
+	if got := fillDays([]Day{ancient}, "lifetime", now); len(got) != 1 || got[0].Date != ancient.Date || !got[0].Recorded {
+		t.Fatalf("unbounded lifetime was filled: %+v", got)
+	}
+	if got := fillDays([]Day{recorded}, "today", now); len(got) != 1 || !got[0].Recorded {
+		t.Fatalf("today changed: %+v", got)
+	}
+}
+
 func TestSuccessfulEmptyAndFailedRefresh(t *testing.T) {
 	var fail atomic.Bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

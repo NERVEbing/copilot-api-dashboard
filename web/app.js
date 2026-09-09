@@ -138,11 +138,12 @@ function renderTrend(days) {
   const ticks = [0, max / 2, max].map((value) => `<line class="grid" x1="${left}" x2="${width - right}" y1="${y(value)}" y2="${y(value)}"/><text x="${left - 10}" y="${y(value) + 4}" text-anchor="end">${escapeHTML(new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 }).format(value))}</text>`).join("");
   const labelIndexes = width < 450 ? [0, days.length - 1] : [0, Math.floor((days.length - 1) / 2), days.length - 1];
   const labels = [...new Set(labelIndexes)].map((i) => `<text x="${x(i)}" y="${height - 7}" text-anchor="${days.length === 1 ? "middle" : i === 0 ? "start" : i === days.length - 1 ? "end" : "middle"}">${escapeHTML(days[i].date)}</text>`).join("");
-  const dots = days.length <= 31 ? values.map((value, i) => `<circle cx="${x(i)}" cy="${y(value)}" r="3"><title>${escapeHTML(days[i].date)}: ${tokens(value)} tokens</title></circle>`).join("") : "";
-  $("trend").innerHTML = `<div class="chart"><svg viewBox="0 0 ${width} ${height}" role="img" aria-label="Daily total tokens. Daily breakdown is available in the daily values table.">${ticks}<polygon class="area" points="${x(0)},${y(0)} ${points} ${x(days.length - 1)},${y(0)}"/><polyline class="line" points="${points}"/>${dots}${labels}</svg></div>
+  const padded = days.some((day) => day.recorded === false);
+  const dots = days.length <= 31 ? values.map((value, i) => `<circle cx="${x(i)}" cy="${y(value)}" r="3"><title>${escapeHTML(days[i].recorded === false ? `${days[i].date}: No recorded usage` : `${days[i].date}: ${tokens(value)} tokens`)}</title></circle>`).join("") : "";
+  $("trend").innerHTML = `<div class="chart"><svg viewBox="0 0 ${width} ${height}" role="img" aria-label="Daily total tokens. Daily breakdown is available in the daily values table.">${ticks}<polygon class="area" points="${x(0)},${y(0)} ${points} ${x(days.length - 1)},${y(0)}"/><polyline class="line" points="${points}"/>${dots}${labels}</svg>${padded ? '<p class="chart-note">Dates without recorded usage are shown as zero.</p>' : ""}</div>
     <details class="chart-details"${expanded ? " open" : ""}><summary>Daily values</summary>${sortableTable("days", "Daily values", ["Date", "Tokens", "Requests", "Cost"], days,
       [(d) => d.date, (d) => d.totals?.total_tokens, (d) => d.totals?.request_count, (d) => costValue(d.totals?.costs)],
-      (day) => `<tr><td>${escapeHTML(day.date)}</td><td class="number">${tokens(day.totals?.total_tokens)}</td><td class="number">${number(day.totals?.request_count)}</td><td class="number">${money(day.totals?.costs)}</td></tr>`, (d) => d.totals?.costs)}</details>`;
+      (day) => `<tr><td>${escapeHTML(day.date)}${day.recorded === false ? ' <span class="not-recorded">Not recorded</span>' : ""}</td><td class="number">${tokens(day.totals?.total_tokens)}</td><td class="number">${number(day.totals?.request_count)}</td><td class="number">${money(day.totals?.costs)}</td></tr>`, (d) => d.totals?.costs)}</details>`;
 }
 
 function renderModels(models) {

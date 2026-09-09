@@ -34,9 +34,10 @@ type Account struct {
 }
 
 type Day struct {
-	Date   string           `json:"date"`
-	Totals upstream.Totals  `json:"totals"`
-	Models []upstream.Model `json:"by_model"`
+	Date     string           `json:"date"`
+	Recorded bool             `json:"recorded"`
+	Totals   upstream.Totals  `json:"totals"`
+	Models   []upstream.Model `json:"by_model"`
 }
 
 type Data struct {
@@ -158,6 +159,7 @@ func (s *Service) Dashboard(ctx context.Context, period, login string) (Response
 	if !found {
 		out.Errors = append(out.Errors, discovery.Failure{Target: login, Operation: "account", Message: "account unavailable in current discovery"})
 	}
+	out.Data.Days = fillDays(out.Data.Days, period, s.now())
 	return out, found
 }
 
@@ -219,6 +221,7 @@ func (s *Service) persistedDashboard(ctx context.Context, accounts []resolved, f
 	if !found {
 		out.Errors = append(out.Errors, discovery.Failure{Target: login, Operation: "account", Message: "account unavailable in current discovery"})
 	}
+	out.Data.Days = fillDays(out.Data.Days, period, s.now())
 	return out, found
 }
 
