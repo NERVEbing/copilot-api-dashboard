@@ -11,4 +11,5 @@ FROM scratch
 COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 COPY --from=build /dashboard /dashboard
 EXPOSE 9000
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 CMD ["/dashboard", "healthcheck"]
 ENTRYPOINT ["/dashboard"]

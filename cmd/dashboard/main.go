@@ -61,6 +61,17 @@ func run() error {
 }
 
 func main() {
+	if len(os.Args) == 2 && os.Args[1] == "healthcheck" {
+		cfg, err := config.Load()
+		if err == nil {
+			err = healthcheck(cfg)
+		}
+		if err != nil {
+			slog.Error("Health check failed", "error", err)
+			os.Exit(1)
+		}
+		return
+	}
 	if err := run(); err != nil {
 		slog.Error("Dashboard stopped", "error", err)
 		os.Exit(1)
