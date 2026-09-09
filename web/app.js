@@ -36,7 +36,7 @@ function headerCell(label, index, sortID, disabledCost, className = "", attribut
 }
 
 function table(label, headers, rows, sortID, disabledCost = false) {
-  const cells = headers.map((header, index) => headerCell(header, index, sortID, disabledCost, index && !["Model", "Plan", "Source", "Target", "Operation", "Error"].includes(header) ? "number" : "")).join("");
+  const cells = headers.map((header, index) => headerCell(header, index, sortID, disabledCost, index && !["Model", "Plan", "Endpoint", "Target", "Operation", "Error"].includes(header) ? "number" : "")).join("");
   return `<div class="table-scroll"${sortID ? ` data-table="${sortID}"` : ""} tabindex="0" role="region" aria-label="${escapeHTML(label)}"><table><caption class="sr-only">${escapeHTML(label)}</caption><thead><tr>${cells}</tr></thead><tbody>${rows.join("")}</tbody></table></div>`;
 }
 
@@ -207,10 +207,10 @@ function renderEvents(data) {
   $("page-label").textContent = `Page ${number(data.page)} of ${number(data.total_pages)}`;
   $("previous").disabled = data.page <= 1;
   $("next").disabled = data.page >= data.total_pages;
-  $("events").innerHTML = data.items.length ? table("Request events", ["Time", "Model", "Source", "Input", "Output", "Cache read", "Cache creation", "Tokens", "Cost"], data.items.map((e) => {
+  $("events").innerHTML = data.items.length ? table("Request events", ["Time", "Model", "Endpoint", "Input", "Output", "Cache read", "Cache creation", "Tokens", "Cost"], data.items.map((e) => {
     const date = new Date(e.created_at_ms);
     const time = Number.isNaN(date.getTime()) ? "—" : date.toLocaleString("en-US");
-    return `<tr><td title="${escapeHTML(e.created_at_utc)}">${escapeHTML(time)}</td><td class="text-cell">${escapeHTML(e.model)}</td><td>${escapeHTML(e.source)}</td>${[e.input_tokens, e.output_tokens, e.cache_read_input_tokens, e.cache_creation_input_tokens, e.total_tokens].map((v) => `<td class="number">${tokens(v)}</td>`).join("")}<td class="number">${money(e.cost ? [e.cost] : null)}</td></tr>`;
+    return `<tr><td title="${escapeHTML(e.created_at_utc)}">${escapeHTML(time)}</td><td class="text-cell">${escapeHTML(e.model)}</td><td>${escapeHTML(e.endpoint)}</td>${[e.input_tokens, e.output_tokens, e.cache_read_input_tokens, e.cache_creation_input_tokens, e.total_tokens].map((v) => `<td class="number">${tokens(v)}</td>`).join("")}<td class="number">${money(e.cost ? [e.cost] : null)}</td></tr>`;
   })) : empty("No request events for this period.");
 }
 
