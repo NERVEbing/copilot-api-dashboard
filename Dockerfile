@@ -5,7 +5,7 @@ RUN go mod download
 COPY cmd ./cmd
 COPY internal ./internal
 COPY web ./web
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /dashboard ./cmd/dashboard
+RUN CGO_ENABLED=0 go build -tags timetzdata -trimpath -ldflags="-s -w" -o /dashboard ./cmd/dashboard
 
 FROM scratch
 COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt

@@ -11,6 +11,7 @@ services:
     networks:
       - copilot
     environment:
+      TZ: "Asia/Shanghai"
       COPILOT_API_DASHBOARD_LISTEN_ADDR: ":9000"
       COPILOT_API_DASHBOARD_BASE_PATH: "/"
       COPILOT_API_DASHBOARD_ENDPOINTS_FILE: /config/endpoints.yaml
