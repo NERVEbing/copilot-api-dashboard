@@ -194,7 +194,7 @@ func (s *Service) persistedDashboard(ctx context.Context, accounts []resolved, f
 			canonical := account.usage.Login
 			out.Data.SelectedAccount = &canonical
 		}
-		days, hasSnapshot, err := s.History.LoadDaily(ctx, account.endpoint.Source, account.endpoint.Name, account.usage.Login, period, s.now())
+		days, hasSnapshot, err := s.History.LoadDaily(ctx, account.endpoint.Name, account.endpoint.URL, account.usage.Login, period, s.now())
 		if err != nil {
 			out.Errors = append(out.Errors, failure(account.endpoint, "persistence", err))
 			continue
