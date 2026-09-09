@@ -1,0 +1,15 @@
+# Local configuration
+/config/endpoints.yaml
+.env
+.env.*
+!.env.example
+
+# Go build and test output
+/bin/
+*.test
+*.out
+
+# Editors and operating systems
+.DS_Store
+.idea/
+.vscode/
