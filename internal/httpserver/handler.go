@@ -28,6 +28,10 @@ func invalid(w http.ResponseWriter, message string) {
 	}{Errors: []discovery.Failure{{Target: "request", Operation: "validation", Message: message}}})
 }
 
+func validAccount(login string) bool {
+	return login != "" && strings.TrimSpace(login) == login && !strings.ContainsAny(login, "\r\n\t") && len(login) <= 256
+}
+
 func params(r *http.Request, events bool) (string, string, int, int, string) {
 	q, err := url.ParseQuery(r.URL.RawQuery)
 	if err != nil {
@@ -50,7 +54,7 @@ func params(r *http.Request, events bool) (string, string, int, int, string) {
 		return "", "", 0, 0, "invalid period"
 	}
 	login := q.Get("account")
-	if (q.Has("account") || events) && (login == "" || strings.TrimSpace(login) != login || strings.ContainsAny(login, "\r\n\t") || len(login) > 256) {
+	if (q.Has("account") || events) && !validAccount(login) {
 		return "", "", 0, 0, "invalid account"
 	}
 	page, size := 1, 20
@@ -69,6 +73,26 @@ func params(r *http.Request, events bool) (string, string, int, int, string) {
 		*dst = n
 	}
 	return period, login, page, size, ""
+}
+
+func syncAccount(r *http.Request) (string, string) {
+	q, err := url.ParseQuery(r.URL.RawQuery)
+	if err != nil {
+		return "", "invalid query string"
+	}
+	for key, values := range q {
+		if key != "account" {
+			return "", "unknown query parameter"
+		}
+		if len(values) != 1 {
+			return "", "query parameters must occur once"
+		}
+	}
+	login := q.Get("account")
+	if q.Has("account") && !validAccount(login) {
+		return "", "invalid account"
+	}
+	return login, ""
 }
 
 func New(service *dashboard.Service, basePath string) http.Handler {
@@ -90,7 +114,7 @@ func New(service *dashboard.Service, basePath string) http.Handler {
 			contentType string
 		}{body, contentType}
 	}
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		requestPath := r.URL.Path
 		if basePath != "/" {
@@ -109,9 +133,31 @@ func New(service *dashboard.Service, basePath string) http.Handler {
 			requestPath = strings.TrimPrefix(requestPath, basePath)
 		}
 		_, asset := assets[requestPath]
-		known := asset || requestPath == "/healthz" || requestPath == "/api/v1/dashboard" || requestPath == "/api/v1/events"
+		known := asset || requestPath == "/healthz" || requestPath == "/api/v1/dashboard" || requestPath == "/api/v1/events" || requestPath == "/api/v1/sync"
 		if !known {
 			http.NotFound(w, r)
+			return
+		}
+		if requestPath == "/api/v1/sync" {
+			if r.Method != http.MethodPost {
+				w.Header().Set("Allow", "POST")
+				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+				return
+			}
+			login, err := syncAccount(r)
+			if err != "" {
+				invalid(w, err)
+				return
+			}
+			failures, found := service.Sync(r.Context(), login)
+			status := http.StatusOK
+			if !found {
+				status = http.StatusNotFound
+			}
+			writeJSON(w, status, struct {
+				Data   map[string]bool     `json:"data"`
+				Errors []discovery.Failure `json:"errors"`
+			}{Data: map[string]bool{"synced": len(failures) == 0}, Errors: failures})
 			return
 		}
 		if r.Method != http.MethodGet {
@@ -145,4 +191,5 @@ func New(service *dashboard.Service, basePath string) http.Handler {
 		}
 		writeJSON(w, status, result)
 	})
+	return http.NewCrossOriginProtection().Handler(handler)
 }

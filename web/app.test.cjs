@@ -3,7 +3,7 @@ const { readFileSync } = require("node:fs");
 const { test } = require("node:test");
 const vm = require("node:vm");
 
-function app(baseURI = "http://localhost/") {
+function app(baseURI = "http://localhost/", fetchImpl = () => new Promise(() => {})) {
   const elements = new Map();
   const element = (id) => {
     if (!elements.has(id)) elements.set(id, {
@@ -16,8 +16,9 @@ function app(baseURI = "http://localhost/") {
   const context = vm.createContext({
     document: { baseURI, getElementById: element },
     ResizeObserver: class { observe() {} },
+    Option: class { constructor(text, value) { this.text = text; this.value = value; } },
     AbortController, URL, URLSearchParams, Intl,
-    fetch: () => new Promise(() => {}),
+    fetch: fetchImpl,
   });
   vm.runInContext(readFileSync(`${__dirname}/app.js`, "utf8"), context);
   return { run: (code) => vm.runInContext(code, context), element };
@@ -26,6 +27,26 @@ function app(baseURI = "http://localhost/") {
 test("API URLs follow the document base path", () => {
   const { run } = app("https://example.test/copilot-dashboard/");
   assert.equal(run("new URL('api/v1/dashboard', appBaseURL).pathname"), "/copilot-dashboard/api/v1/dashboard");
+});
+
+test("manual refresh syncs before reading while ordinary refresh only reads", async () => {
+  const calls = [];
+  const fetch = async (url, options) => {
+    calls.push({ method: options.method, path: url.pathname });
+    const data = url.pathname.endsWith("/dashboard") ? { period: "last_30_days", accounts: [], totals: null, by_model: null, days: null } : { synced: true };
+    return { ok: true, status: 200, json: async () => ({ data, errors: [] }) };
+  };
+  const { run } = app("http://localhost/", fetch);
+  await new Promise((resolve) => setImmediate(resolve));
+  calls.length = 0;
+  await run("refresh(true)");
+  assert.deepEqual(calls, [
+    { method: "POST", path: "/api/v1/sync" },
+    { method: "GET", path: "/api/v1/dashboard" },
+  ]);
+  calls.length = 0;
+  await run("refresh()");
+  assert.deepEqual(calls, [{ method: "GET", path: "/api/v1/dashboard" }]);
 });
 
 test("compact tokens handle unit boundaries", () => {

@@ -21,6 +21,26 @@ func (d staticDiscovery) Discover(context.Context) ([]discovery.Endpoint, []disc
 	return append([]discovery.Endpoint(nil), d...), nil
 }
 
+type memoryHistory struct {
+	days        []upstream.Day
+	hasSnapshot bool
+	saveCalls   int
+	loadCalls   int
+	period      string
+}
+
+func (h *memoryHistory) SaveDaily(_ context.Context, _, _, _, _ string, daily *upstream.Daily) error {
+	h.saveCalls++
+	h.period = daily.Period
+	return nil
+}
+
+func (h *memoryHistory) LoadDaily(_ context.Context, _, _, _, period string, _ time.Time) ([]upstream.Day, bool, error) {
+	h.loadCalls++
+	h.period = period
+	return h.days, h.hasSnapshot, nil
+}
+
 type target struct {
 	endpoint discovery.Endpoint
 	mu       sync.Mutex
@@ -212,5 +232,71 @@ func TestSuccessfulEmptyAndFailedRefresh(t *testing.T) {
 	out, _ = s.Dashboard(context.Background(), "today", "")
 	if out.Data.Totals != nil || out.Data.Days != nil || len(out.Data.Accounts) != 0 || len(out.Errors) != 1 {
 		t.Fatalf("failed refresh retained data: %+v", out)
+	}
+}
+
+func TestPersistentDashboardReadsStoredAggregatesWithoutDailyRequest(t *testing.T) {
+	target := testTarget(t, "Alice", 100, "")
+	history := &memoryHistory{hasSnapshot: true, days: []upstream.Day{{
+		Date:   "2026-09-08",
+		Totals: &upstream.Totals{Tokens: 300, Requests: 2, Costs: []upstream.Cost{{Currency: "USD", Nanos: 9}}},
+		Models: []upstream.Model{{Model: "model-a", Totals: upstream.Totals{Tokens: 300, Requests: 2, Costs: []upstream.Cost{{Currency: "USD", Nanos: 9}}}}},
+	}}}
+	s := serviceFor(t, target)
+	s.History = history
+	s.Now = func() time.Time { return time.Date(2026, 9, 8, 12, 0, 0, 0, time.Local) }
+	out, found := s.Dashboard(context.Background(), "lifetime", "Alice")
+	if !found || len(out.Errors) != 0 || out.Data.Totals.Tokens != 300 || out.Data.Accounts[0].Totals.Tokens != 300 || out.Data.Models[0].Tokens != 300 {
+		t.Fatalf("persisted dashboard: %+v", out)
+	}
+	if target.count("/token-usage/daily") != 0 || target.count("/token-usage") != 0 || history.saveCalls != 0 || history.loadCalls != 1 || history.period != "lifetime" {
+		t.Fatalf("unexpected persistence calls: target=%+v history=%+v", target.calls, history)
+	}
+	if _, status := s.Events(context.Background(), "Alice", "today", 2, 1); status != 200 || history.saveCalls != 0 || history.loadCalls != 1 {
+		t.Fatal("events touched persistence")
+	}
+}
+
+func TestPersistentDashboardServesLastStoredDataWithoutDailyRequest(t *testing.T) {
+	target := testTarget(t, "Alice", 100, "/token-usage/daily")
+	history := &memoryHistory{hasSnapshot: true, days: []upstream.Day{{Date: "2026-09-08", Totals: &upstream.Totals{Tokens: 999}, Models: []upstream.Model{}}}}
+	s := serviceFor(t, target)
+	s.History = history
+	out, found := s.Dashboard(context.Background(), "lifetime", "Alice")
+	if !found || out.Data.Totals.Tokens != 999 || out.Data.Accounts[0].Totals.Tokens != 999 || len(out.Errors) != 0 || history.saveCalls != 0 || history.loadCalls != 1 || target.count("/token-usage/daily") != 0 {
+		t.Fatalf("stored data not served: %+v", out)
+	}
+}
+
+func TestPersistentDashboardDistinguishesMissingAndEmptySnapshots(t *testing.T) {
+	target := testTarget(t, "Alice", 100, "")
+
+	missing := serviceFor(t, target)
+	missing.History = &memoryHistory{}
+	out, found := missing.Dashboard(context.Background(), "lifetime", "Alice")
+	if !found || out.Data.Totals != nil || out.Data.Accounts[0].Totals != nil || len(out.Errors) != 1 || out.Errors[0].Message != "usage has not been synchronized" {
+		t.Fatalf("missing snapshot: %+v", out)
+	}
+
+	empty := serviceFor(t, target)
+	empty.History = &memoryHistory{hasSnapshot: true, days: []upstream.Day{}}
+	out, found = empty.Dashboard(context.Background(), "lifetime", "Alice")
+	if !found || out.Data.Totals == nil || out.Data.Totals.Tokens != 0 || out.Data.Accounts[0].Totals == nil || out.Data.Accounts[0].Totals.Tokens != 0 || len(out.Data.Models) != 0 || len(out.Data.Days) != 0 || len(out.Errors) != 0 {
+		t.Fatalf("empty snapshot: %+v", out)
+	}
+}
+
+func TestSyncFetchesLifetimeAndCanTargetOneAccount(t *testing.T) {
+	a, b := testTarget(t, "Alice", 100, ""), testTarget(t, "Bob", 200, "")
+	history := &memoryHistory{}
+	s := serviceFor(t, a, b)
+	s.History = history
+	failures, found := s.Sync(context.Background(), "alice")
+	if !found || len(failures) != 0 || a.count("/token-usage/daily") != 1 || b.count("/token-usage/daily") != 0 || history.saveCalls != 1 || history.period != "lifetime" {
+		t.Fatalf("targeted sync: found=%v failures=%+v history=%+v", found, failures, history)
+	}
+	failures, found = s.Sync(context.Background(), "missing")
+	if found || len(failures) != 1 || failures[0].Operation != "account" || history.saveCalls != 1 {
+		t.Fatalf("missing account sync: found=%v failures=%+v", found, failures)
 	}
 }

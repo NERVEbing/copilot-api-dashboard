@@ -1,74 +1,100 @@
 # Copilot API Dashboard
 
-一个面向 [Copilot API](https://github.com/caozhiyuan/copilot-api) 的多容器、多账号用量面板。
+A usage dashboard for multiple [Copilot API](https://github.com/caozhiyuan/copilot-api) containers and accounts.
 
-## 功能
+<p align="center">
+  <a href="docs/images/dashboard-overview.png">
+    <img
+      src="docs/images/dashboard-overview.png"
+      alt="Copilot API Dashboard overview"
+      height="600"
+    />
+  </a>
+</p>
 
-- 汇总或按账号查看配额、Token、请求数与费用
-- 展示模型分布、每日趋势和请求记录
-- 自动发现 Docker 中运行的 Copilot API 容器
-- 支持通过 YAML 配置额外端点
-- 无数据库，数据直接从上游读取
+## Features
 
-## 快速开始
+- View quotas, tokens, requests, and costs across accounts
+- Inspect daily usage, model breakdowns, and request events
+- Discover running Copilot API containers through Docker
+- Add endpoints manually with a YAML file
+- Optionally store daily usage history in SQLite
 
-默认配置会发现同一 Docker 网络中使用 `ghcr.io/caozhiyuan/copilot-api:latest` 镜像的运行中容器。
+## Quick start
 
-如果 `service` 网络尚不存在，先运行 `docker network create service`，然后启动 Dashboard：
+The default setup discovers running containers that use the `ghcr.io/caozhiyuan/copilot-api:latest` image on the `service` Docker network.
+
+Create the network if it does not exist, then start the dashboard:
 
 ```sh
+docker network create service
 docker compose up -d --build
 ```
 
-访问 <http://127.0.0.1:9000>。
+Open <http://127.0.0.1:9000>.
 
-Copilot API 容器需要加入 `service` 网络。若使用其他网络，请修改 [`docker-compose.yml`](docker-compose.yml) 中的 `networks.copilot.name`。
+Copilot API containers must join the same Docker network. To use another network, change `networks.copilot.name` in [`docker-compose.yml`](docker-compose.yml).
 
-> Dashboard 默认仅监听本机且不提供身份认证。对外开放时，请使用带认证的反向代理。挂载 Docker socket 会授予容器较高权限，请仅在可信环境中部署。
+> The dashboard listens on localhost and has no built-in authentication. Use an authenticated reverse proxy before exposing it. Mounting the Docker socket gives the container elevated access, so deploy it only in a trusted environment.
 
-## 配置端点
+## Configure endpoints
 
-除 Docker 自动发现外，也可以使用 YAML 配置端点：
+You can add endpoints that are not discovered through Docker:
 
 ```sh
 cp config/endpoints.example.yaml config/endpoints.yaml
 ```
 
-本地运行时，如果未设置 `COPILOT_API_DASHBOARD_ENDPOINTS_FILE` 且当前目录存在 `config/endpoints.yaml`，Dashboard 会自动加载该文件。Docker Compose 部署仍需启用 `docker-compose.yml` 中对应的文件挂载。
+Each endpoint needs a name and URL. The URL may include a reverse proxy subpath. Credentials are optional:
 
-端点 URL 可以是根地址，也可以包含反向代理子路径。端点凭据可以使用以下任一方式，两者不可同时配置：
+```yaml
+endpoints:
+  - name: copilot-api-account-a
+    url: http://copilot-api-account-a:4141
+    api_key_env: COPILOT_API_ACCOUNT_A_KEY
+```
 
-- `api_key_env`：引用传入 Dashboard 容器的环境变量，推荐用于避免在配置文件中保存凭据。
-- `api_key`：直接在 YAML 中明文保存凭据。使用此方式时，应限制配置文件的读取权限，并避免提交到版本库。
+Use `api_key_env` to read a credential from the dashboard environment. You can also use `api_key` to store it directly in YAML, but the file should then be protected and excluded from version control. Do not set both fields for one endpoint.
 
-不需要认证的端点可以省略这两个字段。具体格式参见 `config/endpoints.example.yaml`。
+For Docker Compose, enable the endpoint file mount in `docker-compose.yml`. YAML endpoints take priority when a configured name or URL matches a discovered container.
 
-YAML 端点与 Docker 自动发现结果的名称或 URL 相同时，以 YAML 配置为准。
+Common settings:
 
-常用环境变量：
+| Environment variable                    | Default                                                                |
+| --------------------------------------- | ---------------------------------------------------------------------- |
+| `COPILOT_API_DASHBOARD_LISTEN_ADDR`     | `:9000`                                                                |
+| `COPILOT_API_DASHBOARD_BASE_PATH`       | `/`                                                                    |
+| `COPILOT_API_DASHBOARD_ENDPOINTS_FILE`  | `config/endpoints.yaml` if present, otherwise `/config/endpoints.yaml` |
+| `COPILOT_API_DASHBOARD_DOCKER_IMAGE`    | `ghcr.io/caozhiyuan/copilot-api:latest`                                |
+| `COPILOT_API_DASHBOARD_REQUEST_TIMEOUT` | `5s`                                                                   |
+| `COPILOT_API_DASHBOARD_MAX_CONCURRENCY` | `32`                                                                   |
+| `COPILOT_API_DASHBOARD_LOG_LEVEL`       | `info`                                                                 |
 
-| 变量                                    | 默认值                                  |
-| --------------------------------------- | --------------------------------------- |
-| `COPILOT_API_DASHBOARD_LISTEN_ADDR`     | `:9000`                                 |
-| `COPILOT_API_DASHBOARD_BASE_PATH`       | `/`                                     |
-| `COPILOT_API_DASHBOARD_ENDPOINTS_FILE`  | `config/endpoints.yaml`（存在时），否则 `/config/endpoints.yaml` |
-| `COPILOT_API_DASHBOARD_DOCKER_IMAGE`    | `ghcr.io/caozhiyuan/copilot-api:latest` |
-| `COPILOT_API_DASHBOARD_REQUEST_TIMEOUT` | `5s`                                    |
-| `COPILOT_API_DASHBOARD_MAX_CONCURRENCY` | `32`                                    |
-| `COPILOT_API_DASHBOARD_LOG_LEVEL`       | `info`                                  |
+## Optional SQLite history
 
-## 本地开发
+Persistence is disabled by default. When enabled, the dashboard stores daily usage in SQLite and syncs it at startup, at the configured interval, and when you click Refresh.
 
-需要 Go 1.26 或更高版本。前端资源已嵌入 Go 程序，无需额外安装前端依赖。
+```yaml
+environment:
+  COPILOT_API_DASHBOARD_PERSISTENCE_ENABLED: "true"
+  COPILOT_API_DASHBOARD_DATABASE_PATH: /data/dashboard.sqlite
+  COPILOT_API_DASHBOARD_SYNC_INTERVAL: 10m
+volumes:
+  - ./data:/data
+```
+
+Quota details and request events are always read from Copilot API. The dashboard does not store API keys or request events. Use the same timezone for the dashboard and all Copilot API containers so daily boundaries match.
+
+## Development
+
+Go 1.26 or later is required. The frontend is embedded and has no additional dependencies.
 
 ```sh
 make check
 make run
 ```
 
-也可以分别执行 `make fmt`、`make fmt-check`、`make lint`、`make test`、`make vet` 和 `make build`。
-
-前端测试：
+Run the frontend tests with:
 
 ```sh
 node --test web/app.test.cjs

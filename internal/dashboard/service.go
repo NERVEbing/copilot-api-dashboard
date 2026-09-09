@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/NERVEbing/copilot-api-dashboard/internal/discovery"
 	"github.com/NERVEbing/copilot-api-dashboard/internal/upstream"
@@ -17,6 +18,14 @@ type Discovery interface {
 type Service struct {
 	Discovery Discovery
 	Upstream  *upstream.Client
+	History   History
+	Now       func() time.Time
+	syncMu    sync.Mutex
+}
+
+type History interface {
+	SaveDaily(context.Context, string, string, string, string, *upstream.Daily) error
+	LoadDaily(context.Context, string, string, string, string, time.Time) ([]upstream.Day, bool, error)
 }
 
 type Account struct {
@@ -92,6 +101,9 @@ func (s *Service) resolve(ctx context.Context) ([]resolved, []discovery.Failure)
 
 func (s *Service) Dashboard(ctx context.Context, period, login string) (Response, bool) {
 	accounts, failures := s.resolve(ctx)
+	if s.History != nil {
+		return s.persistedDashboard(ctx, accounts, failures, period, login)
+	}
 	out := Response{Data: Data{Period: period, Accounts: []Account{}}, Errors: failures}
 	found := login == ""
 	if login != "" {
@@ -147,6 +159,107 @@ func (s *Service) Dashboard(ctx context.Context, period, login string) (Response
 		out.Errors = append(out.Errors, discovery.Failure{Target: login, Operation: "account", Message: "account unavailable in current discovery"})
 	}
 	return out, found
+}
+
+func (s *Service) now() time.Time {
+	if s.Now != nil {
+		return s.Now()
+	}
+	return time.Now()
+}
+
+func summarizeDays(days []upstream.Day) (*upstream.Totals, []upstream.Model) {
+	totals := &upstream.Totals{Costs: []upstream.Cost{}}
+	models := []upstream.Model{}
+	for _, day := range days {
+		addTotals(totals, *day.Totals)
+		models = mergeModels(models, day.Models)
+	}
+	return totals, models
+}
+
+func (s *Service) persistedDashboard(ctx context.Context, accounts []resolved, failures []discovery.Failure, period, login string) (Response, bool) {
+	out := Response{Data: Data{Period: period, Accounts: []Account{}}, Errors: failures}
+	found := login == ""
+	if login != "" {
+		out.Data.SelectedAccount = &login
+	}
+	for i, account := range accounts {
+		out.Data.Accounts = append(out.Data.Accounts, Account{Usage: *account.usage})
+		if login != "" && !strings.EqualFold(login, account.usage.Login) {
+			continue
+		}
+		found = true
+		if login != "" {
+			canonical := account.usage.Login
+			out.Data.SelectedAccount = &canonical
+		}
+		days, hasSnapshot, err := s.History.LoadDaily(ctx, account.endpoint.Source, account.endpoint.Name, account.usage.Login, period, s.now())
+		if err != nil {
+			out.Errors = append(out.Errors, failure(account.endpoint, "persistence", err))
+			continue
+		}
+		if !hasSnapshot {
+			out.Errors = append(out.Errors, discovery.Failure{Target: account.endpoint.Name, Operation: "persistence", Message: "usage has not been synchronized"})
+			continue
+		}
+		accountTotals, accountModels := summarizeDays(days)
+		out.Data.Accounts[i].Totals = accountTotals
+		if out.Data.Totals == nil {
+			out.Data.Totals = &upstream.Totals{Costs: []upstream.Cost{}}
+			out.Data.Models = []upstream.Model{}
+			out.Data.Days = []Day{}
+		}
+		addTotals(out.Data.Totals, *accountTotals)
+		out.Data.Models = mergeModels(out.Data.Models, accountModels)
+		for _, day := range days {
+			out.Data.Days = mergeDay(out.Data.Days, day)
+		}
+	}
+	if !found {
+		out.Errors = append(out.Errors, discovery.Failure{Target: login, Operation: "account", Message: "account unavailable in current discovery"})
+	}
+	return out, found
+}
+
+func (s *Service) Sync(ctx context.Context, login string) ([]discovery.Failure, bool) {
+	if s.History == nil {
+		return []discovery.Failure{}, true
+	}
+	s.syncMu.Lock()
+	defer s.syncMu.Unlock()
+	accounts, failures := s.resolve(ctx)
+	found := login == ""
+	type fetched struct {
+		daily *upstream.Daily
+		err   error
+	}
+	results := make([]fetched, len(accounts))
+	var wg sync.WaitGroup
+	for i, account := range accounts {
+		if login != "" && !strings.EqualFold(login, account.usage.Login) {
+			continue
+		}
+		found = true
+		wg.Go(func() { results[i].daily, results[i].err = s.Upstream.Daily(ctx, account.endpoint, "lifetime") })
+	}
+	wg.Wait()
+	for i, result := range results {
+		if login != "" && !strings.EqualFold(login, accounts[i].usage.Login) {
+			continue
+		}
+		if result.err != nil {
+			failures = append(failures, failure(accounts[i].endpoint, "token-usage/daily", result.err))
+			continue
+		}
+		if err := s.History.SaveDaily(ctx, accounts[i].endpoint.Source, accounts[i].endpoint.Name, accounts[i].endpoint.URL, accounts[i].usage.Login, result.daily); err != nil {
+			failures = append(failures, failure(accounts[i].endpoint, "persistence", err))
+		}
+	}
+	if !found {
+		failures = append(failures, discovery.Failure{Target: login, Operation: "account", Message: "account unavailable in current discovery"})
+	}
+	return failures, found
 }
 
 func (s *Service) Events(ctx context.Context, login, period string, page, size int) (EventsResponse, int) {

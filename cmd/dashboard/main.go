@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 	"github.com/NERVEbing/copilot-api-dashboard/internal/dashboard"
 	"github.com/NERVEbing/copilot-api-dashboard/internal/discovery"
 	"github.com/NERVEbing/copilot-api-dashboard/internal/httpserver"
+	sqlitestore "github.com/NERVEbing/copilot-api-dashboard/internal/store/sqlite"
 	"github.com/NERVEbing/copilot-api-dashboard/internal/upstream"
 )
 
@@ -37,9 +39,43 @@ func run() error {
 	up := upstream.New(cfg.RequestTimeout, cfg.MaxConcurrency)
 	defer up.Close()
 	service := &dashboard.Service{Discovery: &discovery.Discoverer{File: cfg.EndpointsFile, Image: cfg.DockerImage, Timeout: cfg.RequestTimeout, Docker: docker}, Upstream: up}
+	var history *sqlitestore.Store
+	if cfg.PersistenceEnabled {
+		history, err = sqlitestore.Open(cfg.DatabasePath)
+		if err != nil {
+			return err
+		}
+		defer func() {
+			if err := history.Close(); err != nil {
+				slog.Warn("Failed to close persistence database", "error", err)
+			}
+		}()
+		service.History = history
+	}
 	server := &http.Server{Addr: cfg.ListenAddr, Handler: httpserver.New(service, cfg.BasePath), ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 60 * time.Second}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
+	var background sync.WaitGroup
+	defer func() {
+		stop()
+		background.Wait()
+	}()
+	if service.History != nil {
+		background.Go(func() {
+			ticker := time.NewTicker(cfg.SyncInterval)
+			defer ticker.Stop()
+			for {
+				failures, _ := service.Sync(ctx, "")
+				for _, failure := range failures {
+					slog.Warn("Persistence sync failed", "target", failure.Target, "operation", failure.Operation, "error", failure.Message)
+				}
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+				}
+			}
+		})
+	}
 	done := make(chan error, 1)
 	go func() { done <- server.ListenAndServe() }()
 	slog.Info("Dashboard listening", "address", cfg.ListenAddr)
