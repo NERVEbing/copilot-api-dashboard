@@ -19,6 +19,9 @@ services:
       COPILOT_API_DASHBOARD_REQUEST_TIMEOUT: 5s
       COPILOT_API_DASHBOARD_MAX_CONCURRENCY: "32"
       COPILOT_API_DASHBOARD_LOG_LEVEL: info
+      # COPILOT_API_DASHBOARD_PERSISTENCE_ENABLED: "true"
+      # COPILOT_API_DASHBOARD_DATABASE_PATH: /data/dashboard.sqlite
+      # COPILOT_API_DASHBOARD_SYNC_INTERVAL: 10m
       # For api_key_env credentials, also pass each referenced variable, for example:
       # COPILOT_API_ACCOUNT_A_KEY: ${COPILOT_API_ACCOUNT_A_KEY:?Set the endpoint key}
     healthcheck:
@@ -32,3 +35,4 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       # - ./config/endpoints.yaml:/config/endpoints.yaml:ro
+      # - ./data:/data

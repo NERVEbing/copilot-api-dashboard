@@ -36,6 +36,7 @@ func TestRoutesAndValidation(t *testing.T) {
 		{"/api/v1/dashboard", 200, "application/json"}, {"/api/v1/dashboard?period=bad", 400, "application/json"}, {"/api/v1/dashboard?period=", 400, "application/json"}, {"/api/v1/dashboard?account=", 400, "application/json"},
 		{"/api/v1/dashboard?account=missing", 404, "application/json"}, {"/api/v1/dashboard?period=today&period=lifetime", 400, "application/json"}, {"/api/v1/dashboard?period=%zz", 400, "application/json"}, {"/api/v1/dashboard?page=1", 400, "application/json"},
 		{"/api/v1/events", 400, "application/json"}, {"/api/v1/events?account=missing", 404, "application/json"}, {"/api/v1/events?account=a&page=0", 400, "application/json"}, {"/api/v1/events?account=a&page_size=101", 400, "application/json"}, {"/api/v1/events?account=a&page=2x", 400, "application/json"}, {"/api/v1/events?account=a&page_size=", 400, "application/json"},
+		{"/api/v1/sync", 405, "text/plain"},
 	} {
 		t.Run(tc.path, func(t *testing.T) {
 			w := httptest.NewRecorder()
@@ -56,6 +57,23 @@ func TestRoutesAndValidation(t *testing.T) {
 	h.ServeHTTP(w, httptest.NewRequest("POST", "/api/v1/dashboard", nil))
 	if w.Code != 405 || w.Header().Get("Allow") != "GET" {
 		t.Fatal("method validation")
+	}
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest("POST", "/api/v1/sync", nil))
+	if w.Code != 200 || !strings.HasPrefix(w.Header().Get("Content-Type"), "application/json") {
+		t.Fatalf("sync response: %d %s", w.Code, w.Body.String())
+	}
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest("POST", "/api/v1/sync?period=today", nil))
+	if w.Code != 400 {
+		t.Fatalf("sync query validation: %d %s", w.Code, w.Body.String())
+	}
+	w = httptest.NewRecorder()
+	crossSite := httptest.NewRequest("POST", "/api/v1/sync", nil)
+	crossSite.Header.Set("Sec-Fetch-Site", "cross-site")
+	h.ServeHTTP(w, crossSite)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("cross-site sync: %d %s", w.Code, w.Body.String())
 	}
 	w = httptest.NewRecorder()
 	h.ServeHTTP(w, httptest.NewRequest("GET", "/api/v1/dashboard", nil))
@@ -163,6 +181,7 @@ func TestBasePathRoutes(t *testing.T) {
 		{"/copilot-dashboard/styles.css", 200, "text/css"},
 		{"/copilot-dashboard/healthz", 200, "application/json"},
 		{"/copilot-dashboard/api/v1/dashboard", 200, "application/json"},
+		{"/copilot-dashboard/api/v1/sync", 405, "text/plain"},
 		{"/copilot-dashboard/unknown", 404, "text/plain"},
 	} {
 		t.Run(tc.path, func(t *testing.T) {
@@ -180,5 +199,10 @@ func TestBasePathRoutes(t *testing.T) {
 	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/copilot-dashboard?period=today", nil))
 	if w.Code != http.StatusPermanentRedirect || w.Header().Get("Location") != "/copilot-dashboard/?period=today" {
 		t.Fatalf("base path redirect: %d %q", w.Code, w.Header().Get("Location"))
+	}
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/copilot-dashboard/api/v1/sync", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("base path sync: %d %s", w.Code, w.Body.String())
 	}
 }

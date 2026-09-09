@@ -12,13 +12,16 @@ import (
 )
 
 type Config struct {
-	ListenAddr     string
-	BasePath       string
-	EndpointsFile  string
-	DockerImage    string
-	RequestTimeout time.Duration
-	MaxConcurrency int
-	LogLevel       slog.Level
+	ListenAddr         string
+	BasePath           string
+	EndpointsFile      string
+	DockerImage        string
+	RequestTimeout     time.Duration
+	MaxConcurrency     int
+	PersistenceEnabled bool
+	DatabasePath       string
+	SyncInterval       time.Duration
+	LogLevel           slog.Level
 }
 
 func Load() (Config, error) { return Parse(os.LookupEnv) }
@@ -54,6 +57,15 @@ func Parse(lookup func(string) (string, bool)) (Config, error) {
 	c.MaxConcurrency, err = strconv.Atoi(get("MAX_CONCURRENCY", "32"))
 	if err != nil || c.MaxConcurrency <= 0 {
 		return c, fmt.Errorf("MAX_CONCURRENCY must be a positive integer")
+	}
+	c.PersistenceEnabled, err = strconv.ParseBool(get("PERSISTENCE_ENABLED", "false"))
+	if err != nil {
+		return c, fmt.Errorf("PERSISTENCE_ENABLED must be a boolean")
+	}
+	c.DatabasePath = get("DATABASE_PATH", "/data/dashboard.sqlite")
+	c.SyncInterval, err = time.ParseDuration(get("SYNC_INTERVAL", "10m"))
+	if c.PersistenceEnabled && (strings.TrimSpace(c.DatabasePath) == "" || err != nil || c.SyncInterval <= 0) {
+		return c, fmt.Errorf("DATABASE_PATH must not be empty and SYNC_INTERVAL must be a positive duration when persistence is enabled")
 	}
 	if err := c.LogLevel.UnmarshalText([]byte(get("LOG_LEVEL", "info"))); err != nil {
 		return c, fmt.Errorf("invalid LOG_LEVEL")

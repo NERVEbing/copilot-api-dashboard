@@ -214,13 +214,13 @@ function renderEvents(data) {
   })) : empty("No request events for this period.");
 }
 
-async function request(path, query, signal) {
+async function request(path, query, signal, method = "GET") {
   const target = state.account || "Dashboard";
   const operation = path.split("/").pop();
   try {
     const url = new URL(path, appBaseURL);
     url.search = query.toString();
-    const response = await fetch(url, { signal, cache: "no-store", credentials: "omit" });
+    const response = await fetch(url, { method, signal, cache: "no-store", credentials: "omit" });
     let body;
     try { body = await response.json(); } catch {
       if (signal.aborted) throw new DOMException("Aborted", "AbortError");
@@ -258,7 +258,7 @@ async function loadEvents() {
   }
 }
 
-async function refresh() {
+async function refresh(sync = false) {
   dashboardController?.abort();
   eventsController?.abort();
   const controller = new AbortController();
@@ -269,7 +269,7 @@ async function refresh() {
   state.eventErrors = [];
   renderErrors();
   $("content").setAttribute("aria-busy", "true");
-  $("announcement").textContent = "Loading usage…";
+  $("announcement").textContent = sync ? "Syncing usage…" : "Loading usage…";
   $("identity").hidden = true;
   chartDays = null;
   tableViews.clear();
@@ -283,12 +283,20 @@ async function refresh() {
   const query = new URLSearchParams({ period: state.period });
   if (state.account) query.set("account", state.account);
   try {
+    let syncErrors = [];
+    if (sync) {
+      const syncQuery = new URLSearchParams();
+      if (state.account) syncQuery.set("account", state.account);
+      const syncResult = await request("api/v1/sync", syncQuery, controller.signal, "POST");
+      if (id !== refreshID || controller.signal.aborted) return;
+      syncErrors = syncResult.errors;
+    }
     const result = await request("api/v1/dashboard", query, controller.signal);
     if (id !== refreshID || controller.signal.aborted) return;
-    state.dashboardErrors = result.errors;
+    state.dashboardErrors = [...syncErrors, ...result.errors];
     const found = renderDashboard(result.data);
     renderErrors();
-    $("announcement").textContent = result.errors.length ? "Usage loaded with failed requests listed below." : "Usage loaded.";
+    $("announcement").textContent = state.dashboardErrors.length ? "Usage loaded with failed requests listed below." : "Usage loaded.";
     if (state.account && found) void loadEvents(); else resetEvents();
   } catch (error) {
     if (!controller.signal.aborted) throw error;
@@ -297,7 +305,7 @@ async function refresh() {
   }
 }
 
-$("controls").addEventListener("submit", (event) => { event.preventDefault(); void refresh(); });
+$("controls").addEventListener("submit", (event) => { event.preventDefault(); void refresh(true); });
 $("account").addEventListener("change", () => { state.account = $("account").value; void refresh(); });
 $("period").addEventListener("change", () => { state.period = $("period").value; void refresh(); });
 $("previous").addEventListener("click", () => { if (state.page > 1) { state.page--; void loadEvents(); } });
