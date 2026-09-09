@@ -45,7 +45,7 @@ func (c *Client) get(ctx context.Context, e discovery.Endpoint, path string, que
 		return err
 	}
 	u, _ := url.Parse(base)
-	u.Path, u.RawQuery = "/"+path, query.Encode()
+	u.Path, u.RawQuery = u.Path+"/"+path, query.Encode()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
 		return errors.New("cannot construct upstream request")

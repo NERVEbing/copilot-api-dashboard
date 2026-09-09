@@ -34,7 +34,16 @@ Copilot API 容器需要加入 `service` 网络。若使用其他网络，请修
 cp config/endpoints.example.yaml config/endpoints.yaml
 ```
 
-编辑 `config/endpoints.yaml`，再启用 `docker-compose.yml` 中对应的文件挂载。凭据通过 `api_key_env` 引用环境变量，不要直接写入配置文件。
+本地运行时，如果未设置 `COPILOT_API_DASHBOARD_ENDPOINTS_FILE` 且当前目录存在 `config/endpoints.yaml`，Dashboard 会自动加载该文件。Docker Compose 部署仍需启用 `docker-compose.yml` 中对应的文件挂载。
+
+端点 URL 可以是根地址，也可以包含反向代理子路径。端点凭据可以使用以下任一方式，两者不可同时配置：
+
+- `api_key_env`：引用传入 Dashboard 容器的环境变量，推荐用于避免在配置文件中保存凭据。
+- `api_key`：直接在 YAML 中明文保存凭据。使用此方式时，应限制配置文件的读取权限，并避免提交到版本库。
+
+不需要认证的端点可以省略这两个字段。具体格式参见 `config/endpoints.example.yaml`。
+
+YAML 端点与 Docker 自动发现结果的名称或 URL 相同时，以 YAML 配置为准。
 
 常用环境变量：
 
@@ -42,7 +51,7 @@ cp config/endpoints.example.yaml config/endpoints.yaml
 | --------------------------------------- | --------------------------------------- |
 | `COPILOT_API_DASHBOARD_LISTEN_ADDR`     | `:9000`                                 |
 | `COPILOT_API_DASHBOARD_BASE_PATH`       | `/`                                     |
-| `COPILOT_API_DASHBOARD_ENDPOINTS_FILE`  | `/config/endpoints.yaml`                |
+| `COPILOT_API_DASHBOARD_ENDPOINTS_FILE`  | `config/endpoints.yaml`（存在时），否则 `/config/endpoints.yaml` |
 | `COPILOT_API_DASHBOARD_DOCKER_IMAGE`    | `ghcr.io/caozhiyuan/copilot-api:latest` |
 | `COPILOT_API_DASHBOARD_REQUEST_TIMEOUT` | `5s`                                    |
 | `COPILOT_API_DASHBOARD_MAX_CONCURRENCY` | `32`                                    |

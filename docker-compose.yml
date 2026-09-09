@@ -19,7 +19,7 @@ services:
       COPILOT_API_DASHBOARD_REQUEST_TIMEOUT: 5s
       COPILOT_API_DASHBOARD_MAX_CONCURRENCY: "32"
       COPILOT_API_DASHBOARD_LOG_LEVEL: info
-      # For YAML credentials, also pass each referenced variable, for example:
+      # For api_key_env credentials, also pass each referenced variable, for example:
       # COPILOT_API_ACCOUNT_A_KEY: ${COPILOT_API_ACCOUNT_A_KEY:?Set the endpoint key}
     healthcheck:
       test: ["CMD", "/dashboard", "healthcheck"]

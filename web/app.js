@@ -36,16 +36,8 @@ function headerCell(label, index, sortID, disabledCost, className = "", attribut
 }
 
 function table(label, headers, rows, sortID, disabledCost = false) {
-  const cells = headers.map((header, index) => headerCell(header, index, sortID, disabledCost, index && !["Model", "Source", "Target", "Operation", "Error"].includes(header) ? "number" : "")).join("");
+  const cells = headers.map((header, index) => headerCell(header, index, sortID, disabledCost, index && !["Model", "Plan", "Source", "Target", "Operation", "Error"].includes(header) ? "number" : "")).join("");
   return `<div class="table-scroll"${sortID ? ` data-table="${sortID}"` : ""} tabindex="0" role="region" aria-label="${escapeHTML(label)}"><table><caption class="sr-only">${escapeHTML(label)}</caption><thead><tr>${cells}</tr></thead><tbody>${rows.join("")}</tbody></table></div>`;
-}
-
-function accountsTable(label, rows, disabledCost) {
-  const cell = (header, index, attributes = "", className = "number") => headerCell(header, index, "accounts", disabledCost, className, attributes);
-  return `<div class="table-scroll" data-table="accounts" tabindex="0" role="region" aria-label="${escapeHTML(label)}"><table><caption class="sr-only">${escapeHTML(label)}</caption><thead>
-    <tr>${cell("Account", 0, ' rowspan="2"', "")}${cell("Plan", 1, ' rowspan="2"', "")}<th scope="colgroup" colspan="4" class="quota-group">Premium quota</th>${cell("Tokens", 6, ' rowspan="2"')}${cell("Requests", 7, ' rowspan="2"')}${cell("Cost", 8, ' rowspan="2"')}</tr>
-    <tr>${cell("Used %", 2)}${cell("Used", 3)}${cell("Remaining", 4)}${cell("Total", 5)}</tr>
-  </thead><tbody>${rows.join("")}</tbody></table></div>`;
 }
 
 function sortableTable(id, label, headers, items, getters, renderRow, costs) {
@@ -62,8 +54,7 @@ function sortableTable(id, label, headers, items, getters, renderRow, costs) {
       if (missing(av) || missing(bv)) return Number(missing(av)) - Number(missing(bv)) || compare(getters[0](a), getters[0](b));
       return compare(av, bv) * sort.direction || compare(getters[0](a), getters[0](b));
     });
-    const rows = sorted.map(renderRow);
-    return id === "accounts" ? accountsTable(label, rows, disabledCost) : table(label, headers, rows, id, disabledCost);
+    return table(label, headers, sorted.map(renderRow), id, disabledCost);
   };
   tableViews.set(id, view);
   return view();
@@ -164,7 +155,7 @@ function renderModels(models) {
 
 function renderAccounts(accounts) {
   if (!accounts.length) { $("accounts").innerHTML = empty("No accounts available."); return; }
-  $("accounts").innerHTML = sortableTable("accounts", "Account usage", ["Account", "Plan", "Used %", "Used", "Remaining", "Total", "Tokens", "Requests", "Cost"], accounts,
+  $("accounts").innerHTML = sortableTable("accounts", "Account usage", ["Account", "Plan", "Usage", "Used", "Remaining", "Total", "Tokens", "Requests", "Cost"], accounts,
     [(a) => a.login, (a) => a.copilot_plan, (a) => usedPercentValue(a.quota_snapshots?.premium_interactions), (a) => usedValue(a.quota_snapshots?.premium_interactions), (a) => a.quota_snapshots?.premium_interactions?.unlimited === false ? a.quota_snapshots.premium_interactions.remaining : null, (a) => a.quota_snapshots?.premium_interactions?.unlimited === false ? a.quota_snapshots.premium_interactions.entitlement : null, (a) => a.totals?.total_tokens, (a) => a.totals?.request_count, (a) => costValue(a.totals?.costs)],
     (a) => `<tr><td class="text-cell">${escapeHTML(a.login)}</td><td>${escapeHTML(a.copilot_plan)}</td><td class="number">${quotaUsage(a.quota_snapshots?.premium_interactions)}</td><td class="number">${quotaUsed(a.quota_snapshots?.premium_interactions)}</td><td class="number">${quotaRemaining(a.quota_snapshots?.premium_interactions)}</td><td class="number">${quotaTotal(a.quota_snapshots?.premium_interactions)}</td><td class="number">${tokens(a.totals?.total_tokens)}</td><td class="number">${number(a.totals?.request_count)}</td><td class="number">${money(a.totals?.costs)}</td></tr>`, (a) => a.totals?.costs);
 }

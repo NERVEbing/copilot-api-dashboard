@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"path"
 	"sort"
 	"strconv"
 	"strings"
@@ -59,9 +60,19 @@ func NormalizeURL(raw string) (string, error) {
 		return "", errors.New("invalid endpoint URL")
 	}
 	u.Scheme = strings.ToLower(u.Scheme)
-	if (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.ForceQuery || strings.Contains(raw, "#") || (u.EscapedPath() != "" && u.EscapedPath() != "/") || u.Opaque != "" {
+	if (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.ForceQuery || strings.Contains(raw, "#") || u.Opaque != "" {
 		return "", errors.New("invalid endpoint URL")
 	}
+	if u.Path == "" || u.Path == "/" {
+		u.Path = ""
+	} else {
+		basePath := strings.TrimSuffix(u.Path, "/")
+		if u.RawPath != "" || path.Clean(basePath) != basePath {
+			return "", errors.New("invalid endpoint URL")
+		}
+		u.Path = basePath
+	}
+	u.RawPath = ""
 	host := strings.ToLower(u.Hostname())
 	port := u.Port()
 	if port != "" {
@@ -81,7 +92,6 @@ func NormalizeURL(raw string) (string, error) {
 	} else {
 		u.Host = host
 	}
-	u.Path, u.RawPath = "", ""
 	return u.String(), nil
 }
 
@@ -98,10 +108,12 @@ func Less(a, b Endpoint) bool {
 func Deduplicate(items []Endpoint) []Endpoint {
 	sort.SliceStable(items, func(i, j int) bool { return Less(items[i], items[j]) })
 	out := make([]Endpoint, 0, len(items))
-	seen := map[string]bool{}
+	seenURLs := map[string]bool{}
+	seenNames := map[string]bool{}
 	for _, e := range items {
-		if !seen[e.URL] {
-			seen[e.URL] = true
+		if !seenURLs[e.URL] && !seenNames[e.Name] {
+			seenURLs[e.URL] = true
+			seenNames[e.Name] = true
 			out = append(out, e)
 		}
 	}
@@ -121,6 +133,7 @@ func LoadYAML(path string, lookup func(string) (string, bool)) ([]Endpoint, erro
 		Endpoints []struct {
 			Name   string  `yaml:"name"`
 			URL    string  `yaml:"url"`
+			Key    *string `yaml:"api_key"`
 			KeyEnv *string `yaml:"api_key_env"`
 		} `yaml:"endpoints"`
 	}
@@ -144,10 +157,18 @@ func LoadYAML(path string, lookup func(string) (string, bool)) ([]Endpoint, erro
 	for i, entry := range doc.Endpoints {
 		base, err := NormalizeURL(entry.URL)
 		if strings.TrimSpace(entry.Name) == "" || err != nil {
-			return nil, fmt.Errorf("invalid endpoint entry %d: name and valid root URL required", i+1)
+			return nil, fmt.Errorf("invalid endpoint entry %d: name and valid URL required", i+1)
 		}
 		key := ""
-		if entry.KeyEnv != nil {
+		if entry.Key != nil && entry.KeyEnv != nil {
+			return nil, fmt.Errorf("invalid endpoint entry %d: api_key and api_key_env are mutually exclusive", i+1)
+		}
+		if entry.Key != nil {
+			key = *entry.Key
+			if strings.TrimSpace(key) == "" {
+				return nil, fmt.Errorf("invalid endpoint entry %d: credential is empty", i+1)
+			}
+		} else if entry.KeyEnv != nil {
 			var ok bool
 			key, ok = lookup(*entry.KeyEnv)
 			if !ok || strings.TrimSpace(key) == "" || *entry.KeyEnv == "" {

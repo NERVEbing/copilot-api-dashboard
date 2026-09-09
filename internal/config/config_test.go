@@ -1,12 +1,15 @@
 package config
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 )
 
 func TestParse(t *testing.T) {
+	t.Chdir(t.TempDir())
 	lookup := func(string) (string, bool) { return "", false }
 	c, err := Parse(lookup)
 	if err != nil || c.ListenAddr != ":9000" || c.BasePath != "/" || c.RequestTimeout != 5*time.Second || c.MaxConcurrency != 32 || c.EndpointsFile != "/config/endpoints.yaml" || c.DockerImage != "ghcr.io/caozhiyuan/copilot-api:latest" || c.LogLevel.String() != "INFO" {
@@ -28,5 +31,27 @@ func TestParse(t *testing.T) {
 	})
 	if err != nil || c.BasePath != "/copilot-dashboard" || c.MaxConcurrency != 4 || c.RequestTimeout != 2*time.Second || c.LogLevel.String() != "DEBUG" {
 		t.Fatalf("overrides: %+v %v", c, err)
+	}
+}
+
+func TestParsePrefersLocalEndpointsFile(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "config"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "config", "endpoints.yaml"), []byte("endpoints: []\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(dir)
+
+	c, err := Parse(func(string) (string, bool) { return "", false })
+	if err != nil || c.EndpointsFile != "config/endpoints.yaml" {
+		t.Fatalf("local endpoints: %+v %v", c, err)
+	}
+	c, err = Parse(func(key string) (string, bool) {
+		return "/custom/endpoints.yaml", key == "COPILOT_API_DASHBOARD_ENDPOINTS_FILE"
+	})
+	if err != nil || c.EndpointsFile != "/custom/endpoints.yaml" {
+		t.Fatalf("explicit endpoints: %+v %v", c, err)
 	}
 }

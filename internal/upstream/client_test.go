@@ -26,22 +26,27 @@ func fixture(t *testing.T, name string) []byte {
 
 func TestContractFixtures(t *testing.T) {
 	data := map[string][]byte{"/usage": fixture(t, "usage"), "/token-usage": fixture(t, "summary"), "/token-usage/daily": fixture(t, "daily"), "/token-usage/events": fixture(t, "events")}
+	const basePath = "/copilot/account-a"
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "GET" || r.Header.Get("x-api-key") != "test-key" {
 			t.Error("incorrect upstream request")
 		}
-		if r.URL.Path != "/usage" && r.URL.Query().Get("period") != "last_30_days" {
+		requestPath := strings.TrimPrefix(r.URL.Path, basePath)
+		if requestPath == r.URL.Path {
+			t.Errorf("missing base path in %s", r.URL.Path)
+		}
+		if requestPath != "/usage" && r.URL.Query().Get("period") != "last_30_days" {
 			t.Error("missing period")
 		}
-		if r.URL.Path == "/token-usage/events" && (r.URL.Query().Get("page") != "2" || r.URL.Query().Get("page_size") != "1") {
+		if requestPath == "/token-usage/events" && (r.URL.Query().Get("page") != "2" || r.URL.Query().Get("page_size") != "1") {
 			t.Error("wrong pagination")
 		}
-		_, _ = w.Write(data[r.URL.Path])
+		_, _ = w.Write(data[requestPath])
 	}))
 	defer srv.Close()
 	c := New(time.Second, 2)
 	defer c.Close()
-	e := discovery.Endpoint{URL: srv.URL, APIKey: "test-key"}
+	e := discovery.Endpoint{URL: srv.URL + basePath + "/", APIKey: "test-key"}
 	ctx := context.Background()
 	u, err := c.Usage(ctx, e)
 	if err != nil || u.Login != "Account-A" || !*u.Quotas.Chat.Unlimited || *u.Quotas.PremiumInteractions.Remaining != 270 {

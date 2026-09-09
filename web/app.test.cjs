@@ -63,7 +63,7 @@ test("numeric sorting uses original values, keeps missing last, and does not mut
   assert.ok(element("models").innerHTML.includes('aria-sort="ascending"'));
 });
 
-test("account quota usage percentage is visual, grouped and sorted descending by default", () => {
+test("account quota usage percentage is visual and sorted descending by default", () => {
   const { run, element } = app();
   run(`const accounts = [
     {login:'Missing'},
@@ -74,7 +74,10 @@ test("account quota usage percentage is visual, grouped and sorted descending by
   ]; renderAccounts(accounts);`);
   const names = () => [...element("accounts").innerHTML.matchAll(/class="text-cell">([^<]+)/g)].map((match) => match[1]);
   assert.deepEqual(names(), ["RemainingLow", "PercentHigh", "AbsoluteHigh", "Missing", "Unlimited"]);
-  assert.ok(element("accounts").innerHTML.includes('scope="colgroup" colspan="4" class="quota-group">Premium quota'));
+  assert.ok(element("accounts").innerHTML.includes(">Usage "));
+  assert.ok(element("accounts").innerHTML.includes(">Total "));
+  assert.ok(!element("accounts").innerHTML.includes("Premium"));
+  assert.ok(!element("accounts").innerHTML.includes('scope="colgroup"'));
   assert.ok(element("accounts").innerHTML.includes('<progress value="90" max="100" aria-label="90% used"></progress><span class="quota-usage-value">90%</span>'));
   assert.ok(element("accounts").innerHTML.includes('<span class="unlimited">Unlimited</span>'));
   assert.ok(run("quotaUsage({unlimited:false,percent_remaining:-4.2})").includes('class="quota-usage exhausted"><progress value="100" max="100" aria-label="104.2% used"></progress><span class="quota-usage-value">104.2%</span>'));

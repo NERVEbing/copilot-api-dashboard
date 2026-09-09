@@ -23,13 +23,13 @@ func yamlFile(t *testing.T, body string) string {
 }
 
 func TestNormalizeURL(t *testing.T) {
-	for raw, want := range map[string]string{"http://EXAMPLE:80/": "http://example", "https://EXAMPLE:443": "https://example", "http://[::1]:4141/": "http://[::1]:4141", "http://example:04141": "http://example:4141"} {
+	for raw, want := range map[string]string{"http://EXAMPLE:80/": "http://example", "https://EXAMPLE:443": "https://example", "http://[::1]:4141/": "http://[::1]:4141", "http://example:04141": "http://example:4141", "http://EXAMPLE/copilot/account/": "http://example/copilot/account"} {
 		got, err := NormalizeURL(raw)
 		if err != nil || got != want {
 			t.Fatalf("%s: %s %v", raw, got, err)
 		}
 	}
-	for _, raw := range []string{"", "ftp://example", "http://user:password@example", "http://example/usage", "http://example?key=secret", "http://example?", "http://example#", "http://example/#x", "http://example:99999", "http:///", "http://example/%2f"} {
+	for _, raw := range []string{"", "ftp://example", "http://user:password@example", "http://example/a/../b", "http://example/a//b", "http://example?key=secret", "http://example?", "http://example#", "http://example/#x", "http://example:99999", "http:///", "http://example/%2f"} {
 		if _, err := NormalizeURL(raw); err == nil {
 			t.Errorf("accepted %s", raw)
 		}
@@ -46,7 +46,12 @@ func TestYAML(t *testing.T) {
 	if _, err := LoadYAML(filepath.Join(t.TempDir(), "missing"), lookup); err != nil {
 		t.Fatal(err)
 	}
-	for _, body := range []string{"secret: test-credential", "endpoints:\n - name: a\n   url: http://a\n   api_key: test-credential", "endpoints:\n - name: a", "endpoints:\n - name: a\n   url: http://a\n   api_key_env: MISSING", "endpoints:\n - name: a\n   url: http://a\n   api_key_env: ''", "endpoints: []\n---\nendpoints: []", "endpoints: [", "endpoints: []\n" + strings.Repeat("#", 1<<20)} {
+	p = yamlFile(t, "endpoints:\n  - name: a\n    url: http://example\n    api_key: direct-credential\n")
+	items, err = LoadYAML(p, lookup)
+	if err != nil || len(items) != 1 || items[0].APIKey != "direct-credential" {
+		t.Fatalf("load direct credential failed: %v", err)
+	}
+	for _, body := range []string{"secret: test-credential", "endpoints:\n - name: a\n   url: http://a\n   api_key: test-credential\n   api_key_env: TEST_KEY", "endpoints:\n - name: a", "endpoints:\n - name: a\n   url: http://a\n   api_key: ''", "endpoints:\n - name: a\n   url: http://a\n   api_key_env: MISSING", "endpoints:\n - name: a\n   url: http://a\n   api_key_env: ''", "endpoints: []\n---\nendpoints: []", "endpoints: [", "endpoints: []\n" + strings.Repeat("#", 1<<20)} {
 		_, err := LoadYAML(yamlFile(t, body), lookup)
 		if err == nil {
 			t.Errorf("accepted invalid YAML")
@@ -54,7 +59,7 @@ func TestYAML(t *testing.T) {
 			t.Fatal("credential exposed")
 		}
 	}
-	items = Deduplicate([]Endpoint{{Name: "z", URL: "http://a", Source: "docker"}, {Name: "b", URL: "http://a", Source: "yaml", APIKey: "chosen"}, {Name: "a", URL: "http://b", Source: "yaml"}})
+	items = Deduplicate([]Endpoint{{Name: "z", URL: "http://a", Source: "docker"}, {Name: "b", URL: "http://a", Source: "yaml", APIKey: "chosen"}, {Name: "a", URL: "http://b", Source: "yaml"}, {Name: "a", URL: "http://docker-a", Source: "docker"}})
 	if len(items) != 2 || items[0].Name != "b" || items[0].APIKey != "chosen" {
 		t.Fatal("wrong duplicate winner")
 	}
