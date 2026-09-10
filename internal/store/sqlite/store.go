@@ -140,8 +140,6 @@ func (s *Store) initialize(ctx context.Context) error {
 
 func (s *Store) Close() error { return s.db.Close() }
 
-func sourceKey(sourceType, name string) string { return sourceType + "\x00" + name }
-
 type usageSegment struct {
 	id        int64
 	ordinal   int
@@ -245,16 +243,26 @@ func validateDaily(daily *upstream.Daily) error {
 
 func persistAccount(ctx context.Context, tx *sql.Tx, sourceType, name, normalizedURL, login string) (int64, int64, error) {
 	now := time.Now().UnixMilli()
-	key := sourceKey(sourceType, name)
-	if _, err := tx.ExecContext(ctx, `INSERT INTO sources(source_key, source_type, name, normalized_url, last_seen_ms)
-		VALUES(?, ?, ?, ?, ?)
-		ON CONFLICT(source_key) DO UPDATE SET source_type=excluded.source_type, name=excluded.name,
-		normalized_url=excluded.normalized_url, last_seen_ms=excluded.last_seen_ms`, key, sourceType, name, normalizedURL, now); err != nil {
-		return 0, 0, errors.New("cannot persist source")
+	sourceID, found, err := resolveSourceID(ctx, tx, name, normalizedURL)
+	if err != nil {
+		return 0, 0, err
 	}
-	var sourceID int64
-	if err := tx.QueryRowContext(ctx, "SELECT id FROM sources WHERE source_key = ?", key).Scan(&sourceID); err != nil {
-		return 0, 0, errors.New("cannot resolve persisted source")
+	if found {
+		if _, err := tx.ExecContext(ctx, `UPDATE sources
+			SET source_type = ?, name = ?, normalized_url = ?, last_seen_ms = ?
+			WHERE id = ?`, sourceType, name, normalizedURL, now, sourceID); err != nil {
+			return 0, 0, errors.New("cannot persist source")
+		}
+	} else {
+		result, err := tx.ExecContext(ctx, `INSERT INTO sources(source_key, source_type, name, normalized_url, last_seen_ms)
+			VALUES(lower(hex(randomblob(16))), ?, ?, ?, ?)`, sourceType, name, normalizedURL, now)
+		if err != nil {
+			return 0, 0, errors.New("cannot persist source")
+		}
+		sourceID, err = result.LastInsertId()
+		if err != nil {
+			return 0, 0, errors.New("cannot resolve persisted source")
+		}
 	}
 	loginKey := strings.ToLower(login)
 	if _, err := tx.ExecContext(ctx, `INSERT INTO accounts(source_id, login_key, login, first_seen_ms, last_seen_ms)
@@ -267,6 +275,49 @@ func persistAccount(ctx context.Context, tx *sql.Tx, sourceType, name, normalize
 		return 0, 0, errors.New("cannot resolve persisted account")
 	}
 	return accountID, now, nil
+}
+
+func resolveSourceID(ctx context.Context, tx *sql.Tx, name, normalizedURL string) (int64, bool, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT id, name = ?, normalized_url = ?
+		FROM sources WHERE name = ? OR normalized_url = ? ORDER BY id`, name, normalizedURL, name, normalizedURL)
+	if err != nil {
+		return 0, false, errors.New("cannot resolve persisted source")
+	}
+	defer func() { _ = rows.Close() }()
+	var nameID, urlID int64
+	var hasName, hasURL bool
+	for rows.Next() {
+		var id int64
+		var matchesName, matchesURL bool
+		if err := rows.Scan(&id, &matchesName, &matchesURL); err != nil {
+			return 0, false, errors.New("cannot resolve persisted source")
+		}
+		if matchesName {
+			if hasName && nameID != id {
+				return 0, false, errors.New("persisted source identity is ambiguous")
+			}
+			nameID, hasName = id, true
+		}
+		if matchesURL {
+			if hasURL && urlID != id {
+				return 0, false, errors.New("persisted source identity is ambiguous")
+			}
+			urlID, hasURL = id, true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return 0, false, errors.New("cannot resolve persisted source")
+	}
+	if hasName && hasURL && nameID != urlID {
+		return 0, false, errors.New("persisted source identity is ambiguous")
+	}
+	if hasName {
+		return nameID, true, nil
+	}
+	if hasURL {
+		return urlID, true, nil
+	}
+	return 0, false, nil
 }
 
 func latestSegment(ctx context.Context, tx *sql.Tx, accountID int64) (*usageSegment, error) {
@@ -547,17 +598,26 @@ func periodStart(period string, now time.Time) int64 {
 	return start.UnixMilli()
 }
 
-func (s *Store) LoadDaily(ctx context.Context, sourceType, name, login, period string, now time.Time) ([]upstream.Day, bool, error) {
+func (s *Store) LoadDaily(ctx context.Context, name, normalizedURL, login, period string, now time.Time) ([]upstream.Day, bool, error) {
 	start, end := periodStart(period, now), now.UnixMilli()+1
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return nil, false, errors.New("cannot begin persistence read transaction")
 	}
 	defer func() { _ = tx.Rollback() }()
+	sourceID, found, err := resolveSourceID(ctx, tx, name, normalizedURL)
+	if err != nil {
+		return nil, false, err
+	}
+	if !found {
+		if err := tx.Commit(); err != nil {
+			return nil, false, errors.New("cannot commit persistence read transaction")
+		}
+		return nil, false, nil
+	}
 	var accountID int64
-	err = tx.QueryRowContext(ctx, `SELECT a.id FROM accounts a
-		JOIN sources s ON s.id = a.source_id
-		WHERE s.source_key = ? AND a.login_key = ?`, sourceKey(sourceType, name), strings.ToLower(login)).Scan(&accountID)
+	err = tx.QueryRowContext(ctx, `SELECT id FROM accounts
+		WHERE source_id = ? AND login_key = ?`, sourceID, strings.ToLower(login)).Scan(&accountID)
 	if errors.Is(err, sql.ErrNoRows) {
 		if err := tx.Commit(); err != nil {
 			return nil, false, errors.New("cannot commit persistence read transaction")

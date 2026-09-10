@@ -122,6 +122,90 @@ function renderMetrics(totals) {
   $("metrics").innerHTML = values.join("");
 }
 
+function trendTooltip(day) {
+  if (day.recorded === false) return `<strong>${escapeHTML(day.date)}</strong><span class="chart-tooltip-empty">No recorded usage</span>`;
+  return `<strong>${escapeHTML(day.date)}</strong><dl><div><dt>Total tokens</dt><dd>${tokens(day.totals?.total_tokens)}</dd></div><div><dt>Requests</dt><dd>${number(day.totals?.request_count)}</dd></div><div><dt>Cost</dt><dd>${money(day.totals?.costs)}</dd></div></dl>`;
+}
+
+function trendIndexAt(position, start, end, count) {
+  if (count <= 1 || end <= start) return 0;
+  return Math.round((Math.min(end, Math.max(start, position)) - start) / (end - start) * (count - 1));
+}
+
+function setupTrendInteraction(days, geometry) {
+  const plot = $("trend").querySelector(".chart-plot");
+  if (!plot) return;
+  const svg = plot.querySelector("svg"), hitArea = plot.querySelector(".chart-hit-area"), guide = plot.querySelector(".chart-guide"), active = plot.querySelector(".chart-active"), tooltip = plot.querySelector(".chart-tooltip");
+  const { width, height, left, right, x, y, values } = geometry;
+  let selected = -1;
+
+  const hide = (reset = false) => {
+    if (reset) selected = -1;
+    guide.hidden = true;
+    active.hidden = true;
+    tooltip.hidden = true;
+    plot.style.paddingBottom = "";
+  };
+  const show = (index) => {
+    if (index < 0 || index >= days.length) return;
+    if (index === selected && !tooltip.hidden) return;
+    selected = index;
+    const pointX = x(index), pointY = y(values[index]);
+    guide.setAttribute("x1", pointX);
+    guide.setAttribute("x2", pointX);
+    active.setAttribute("cx", pointX);
+    active.setAttribute("cy", pointY);
+    guide.hidden = false;
+    active.hidden = false;
+    tooltip.innerHTML = trendTooltip(days[index]);
+    tooltip.hidden = false;
+    plot.style.paddingBottom = "";
+
+    const bounds = svg.getBoundingClientRect();
+    const scale = Math.min(bounds.width / width, bounds.height / height);
+    const offsetX = (bounds.width - width * scale) / 2, offsetY = (bounds.height - height * scale) / 2;
+    const tooltipWidth = tooltip.offsetWidth, tooltipHeight = tooltip.offsetHeight;
+    const screenX = offsetX + pointX * scale, screenY = offsetY + pointY * scale;
+    tooltip.style.left = `${Math.min(bounds.width - tooltipWidth - 8, Math.max(8, screenX - tooltipWidth / 2))}px`;
+    const above = screenY - tooltipHeight - 12, below = screenY + 12;
+    if (above >= 4) tooltip.style.top = `${above}px`;
+    else if (below + tooltipHeight <= bounds.height - 4) tooltip.style.top = `${below}px`;
+    else {
+      tooltip.style.top = `${bounds.height + 8}px`;
+      plot.style.paddingBottom = `${tooltipHeight + 16}px`;
+    }
+  };
+  const showAtPointer = (event) => {
+    const bounds = svg.getBoundingClientRect();
+    const scale = Math.min(bounds.width / width, bounds.height / height);
+    const offsetX = (bounds.width - width * scale) / 2;
+    const position = (event.clientX - bounds.left - offsetX) / scale;
+    show(trendIndexAt(position, left, width - right, days.length));
+  };
+
+  hitArea.addEventListener("pointermove", showAtPointer);
+  hitArea.addEventListener("pointerdown", (event) => {
+    showAtPointer(event);
+    if (event.pointerType !== "mouse") plot.focus({ preventScroll: true });
+  });
+  hitArea.addEventListener("pointerleave", (event) => {
+    if (event.pointerType === "mouse") hide();
+  });
+  plot.addEventListener("focus", () => show(selected >= 0 ? selected : days.length - 1));
+  plot.addEventListener("blur", () => hide(true));
+  plot.addEventListener("keydown", (event) => {
+    let index = selected >= 0 ? selected : days.length - 1;
+    if (event.key === "ArrowLeft") index = Math.max(0, index - 1);
+    else if (event.key === "ArrowRight") index = Math.min(days.length - 1, index + 1);
+    else if (event.key === "Home") index = 0;
+    else if (event.key === "End") index = days.length - 1;
+    else if (event.key === "Escape") { hide(); return; }
+    else return;
+    event.preventDefault();
+    show(index);
+  });
+}
+
 function renderTrend(days) {
   chartDays = days;
   $("trend-section").hidden = state.period === "today";
@@ -138,11 +222,13 @@ function renderTrend(days) {
   const ticks = [0, max / 2, max].map((value) => `<line class="grid" x1="${left}" x2="${width - right}" y1="${y(value)}" y2="${y(value)}"/><text x="${left - 10}" y="${y(value) + 4}" text-anchor="end">${escapeHTML(new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 }).format(value))}</text>`).join("");
   const labelIndexes = width < 450 ? [0, days.length - 1] : [0, Math.floor((days.length - 1) / 2), days.length - 1];
   const labels = [...new Set(labelIndexes)].map((i) => `<text x="${x(i)}" y="${height - 7}" text-anchor="${days.length === 1 ? "middle" : i === 0 ? "start" : i === days.length - 1 ? "end" : "middle"}">${escapeHTML(days[i].date)}</text>`).join("");
-  const dots = days.length <= 31 ? values.map((value, i) => `<circle cx="${x(i)}" cy="${y(value)}" r="3"><title>${escapeHTML(days[i].date)}: ${tokens(value)} tokens</title></circle>`).join("") : "";
-  $("trend").innerHTML = `<div class="chart"><svg viewBox="0 0 ${width} ${height}" role="img" aria-label="Daily total tokens. Daily breakdown is available in the daily values table.">${ticks}<polygon class="area" points="${x(0)},${y(0)} ${points} ${x(days.length - 1)},${y(0)}"/><polyline class="line" points="${points}"/>${dots}${labels}</svg></div>
+  const padded = days.some((day) => day.recorded === false);
+  const dots = days.length <= 31 ? values.map((value, i) => `<circle class="chart-point" cx="${x(i)}" cy="${y(value)}" r="3"/>`).join("") : "";
+  $("trend").innerHTML = `<div class="chart"><div class="chart-plot" tabindex="0" role="group" aria-label="Daily total tokens. Use Left and Right Arrow keys to inspect dates."><svg viewBox="0 0 ${width} ${height}" role="img" aria-label="Daily total tokens. Daily breakdown is available in the daily values table.">${ticks}<polygon class="area" points="${x(0)},${y(0)} ${points} ${x(days.length - 1)},${y(0)}"/><polyline class="line" points="${points}"/>${dots}<line class="chart-guide" y1="${top}" y2="${height - bottom}" hidden/><circle class="chart-active" r="5" hidden/>${labels}<rect class="chart-hit-area" x="${left}" y="${top}" width="${width - left - right}" height="${height - top - bottom}"/></svg><div id="trend-tooltip" class="chart-tooltip" role="status" aria-atomic="true" hidden></div></div>${padded ? '<p class="chart-note">Dates without recorded usage are shown as zero.</p>' : ""}</div>
     <details class="chart-details"${expanded ? " open" : ""}><summary>Daily values</summary>${sortableTable("days", "Daily values", ["Date", "Tokens", "Requests", "Cost"], days,
       [(d) => d.date, (d) => d.totals?.total_tokens, (d) => d.totals?.request_count, (d) => costValue(d.totals?.costs)],
-      (day) => `<tr><td>${escapeHTML(day.date)}</td><td class="number">${tokens(day.totals?.total_tokens)}</td><td class="number">${number(day.totals?.request_count)}</td><td class="number">${money(day.totals?.costs)}</td></tr>`, (d) => d.totals?.costs)}</details>`;
+      (day) => `<tr><td>${escapeHTML(day.date)}${day.recorded === false ? ' <span class="not-recorded">Not recorded</span>' : ""}</td><td class="number">${tokens(day.totals?.total_tokens)}</td><td class="number">${number(day.totals?.request_count)}</td><td class="number">${money(day.totals?.costs)}</td></tr>`, (d) => d.totals?.costs)}</details>`;
+  setupTrendInteraction(days, { width, height, left, right, x, y, values });
 }
 
 function renderModels(models) {

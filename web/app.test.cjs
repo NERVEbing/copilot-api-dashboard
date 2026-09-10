@@ -5,10 +5,32 @@ const vm = require("node:vm");
 
 function app(baseURI = "http://localhost/", fetchImpl = () => new Promise(() => {})) {
   const elements = new Map();
+  const node = (properties = {}) => {
+    const listeners = new Map(), attributes = new Map();
+    let innerHTML = "", innerHTMLWrites = 0;
+    return Object.assign({
+      hidden: true, style: {}, offsetWidth: 190, offsetHeight: 100,
+      addEventListener(type, listener) { listeners.set(type, listener); },
+      dispatch(type, event = {}) { listeners.get(type)?.({ preventDefault() {}, pointerType: "mouse", clientX: 0, ...event }); },
+      setAttribute(name, value) { attributes.set(name, String(value)); },
+      getAttribute(name) { return attributes.get(name); },
+      get innerHTML() { return innerHTML; },
+      set innerHTML(value) { innerHTML = value; innerHTMLWrites++; },
+      get innerHTMLWrites() { return innerHTMLWrites; },
+    }, properties);
+  };
+  const guide = node(), active = node(), tooltip = node();
+  const svg = node({ getBoundingClientRect() { return { left: 0, width: 768, height: 220 }; } });
+  const hitArea = node();
+  const plot = node({
+    hidden: false,
+    querySelector(selector) { return ({ svg, ".chart-hit-area": hitArea, ".chart-guide": guide, ".chart-active": active, ".chart-tooltip": tooltip })[selector] ?? null; },
+    focus() { this.dispatch("focus"); },
+  });
   const element = (id) => {
     if (!elements.has(id)) elements.set(id, {
       innerHTML: "", textContent: "", hidden: false, clientWidth: 800,
-      classList: { toggle() {} }, querySelector() { return null; },
+      classList: { toggle() {} }, querySelector(selector) { return id === "trend" && selector === ".chart-plot" && this.innerHTML.includes('class="chart-plot"') ? plot : null; },
       setAttribute() {}, addEventListener() {}, replaceChildren() {},
     });
     return elements.get(id);
@@ -21,7 +43,7 @@ function app(baseURI = "http://localhost/", fetchImpl = () => new Promise(() => 
     fetch: fetchImpl,
   });
   vm.runInContext(readFileSync(`${__dirname}/app.js`, "utf8"), context);
-  return { run: (code) => vm.runInContext(code, context), element };
+  return { run: (code) => vm.runInContext(code, context), element, chart: { plot, svg, hitArea, guide, active, tooltip } };
 }
 
 test("API URLs follow the document base path", () => {
@@ -151,4 +173,68 @@ test("Today hides daily usage, other periods restore it, and table sorting leave
   assert.ok(element("trend").innerHTML.indexOf('<td>2026-09-09') < element("trend").innerHTML.indexOf('<td>2026-09-08'));
   run("renderTrend(null)");
   assert.ok(element("trend").innerHTML.includes("—"));
+});
+
+test("daily usage identifies zero-filled dates without changing their displayed values", () => {
+  const { run, element } = app();
+  run(`state.period = 'last_7_days'; renderTrend([
+    {date:'2026-09-08',recorded:false,totals:{total_tokens:0,request_count:0,costs:[]}},
+    {date:'2026-09-09',recorded:true,totals:{total_tokens:200,request_count:1,costs:[]}}
+  ])`);
+  assert.ok(element("trend").innerHTML.includes("Dates without recorded usage are shown as zero."));
+  assert.ok(!element("trend").innerHTML.includes("<title>"));
+  assert.ok(run("trendTooltip({date:'2026-09-08',recorded:false,totals:{total_tokens:0}})").includes("No recorded usage"));
+  assert.ok(element("trend").innerHTML.includes('<td>2026-09-08 <span class="not-recorded">Not recorded</span></td><td class="number">0</td><td class="number">0</td>'));
+  run(`renderTrend([{date:'2026-09-09',recorded:true,totals:{total_tokens:200}}])`);
+  assert.ok(!element("trend").innerHTML.includes("Dates without recorded usage"));
+  assert.ok(!element("trend").innerHTML.includes("Not recorded"));
+});
+
+test("daily usage provides an interactive exact-value tooltip without changing chart data", () => {
+  const { run, element } = app();
+  run(`state.period = 'last_7_days'; renderTrend([
+    {date:'2026-09-08',recorded:true,totals:{total_tokens:1234567,request_count:42,costs:[{currency:'USD',total_cost_nanos:1250000000}]}},
+    {date:'2026-09-09',recorded:true,totals:{total_tokens:2000000,request_count:50,costs:[]}}
+  ])`);
+  assert.ok(element("trend").innerHTML.includes('class="chart-plot" tabindex="0"'));
+  assert.ok(element("trend").innerHTML.includes('class="chart-guide"'));
+  assert.ok(element("trend").innerHTML.includes('class="chart-tooltip" role="status"'));
+  assert.ok(run("trendTooltip({date:'2026-09-08',recorded:true,totals:{total_tokens:1234567,request_count:42,costs:[{currency:'USD',total_cost_nanos:1250000000}]}})").includes("1.23M"));
+  assert.ok(run("trendTooltip({date:'2026-09-08',recorded:true,totals:{total_tokens:1234567,request_count:42,costs:[{currency:'USD',total_cost_nanos:1250000000}]}})").includes("USD 1.25"));
+  assert.ok(run("trendTooltip({date:'2026-09-07',recorded:false,totals:{total_tokens:0}})").includes("No recorded usage"));
+  assert.equal(run("trendIndexAt(50, 50, 750, 8)"), 0);
+  assert.equal(run("trendIndexAt(400, 50, 750, 8)"), 4);
+  assert.equal(run("trendIndexAt(800, 50, 750, 8)"), 7);
+});
+
+test("daily usage interaction updates only on date changes and preserves keyboard position after Escape", () => {
+  const { run, chart } = app();
+  run(`state.period = 'last_7_days'; renderTrend([
+    {date:'2026-09-08',recorded:true,totals:{total_tokens:100,request_count:1,costs:[]}},
+    {date:'2026-09-09',recorded:true,totals:{total_tokens:200,request_count:2,costs:[]}},
+    {date:'2026-09-10',recorded:true,totals:{total_tokens:300,request_count:3,costs:[]}}
+  ])`);
+  chart.hitArea.dispatch("pointermove", { clientX: 400 });
+  assert.ok(chart.tooltip.innerHTML.includes("2026-09-09"));
+  const writes = chart.tooltip.innerHTMLWrites;
+  chart.hitArea.dispatch("pointermove", { clientX: 410 });
+  assert.equal(chart.tooltip.innerHTMLWrites, writes);
+  chart.plot.dispatch("keydown", { key: "Escape" });
+  assert.equal(chart.tooltip.hidden, true);
+  chart.plot.dispatch("keydown", { key: "ArrowRight" });
+  assert.ok(chart.tooltip.innerHTML.includes("2026-09-10"));
+});
+
+test("touch selects the tapped date before focus and pointer events are limited to the hit area", () => {
+  const { run, chart } = app();
+  run(`state.period = 'last_7_days'; renderTrend([
+    {date:'2026-09-08',recorded:true,totals:{total_tokens:100}},
+    {date:'2026-09-09',recorded:true,totals:{total_tokens:200}},
+    {date:'2026-09-10',recorded:true,totals:{total_tokens:300}}
+  ])`);
+  chart.plot.dispatch("pointermove", { clientX: 700 });
+  assert.equal(chart.tooltip.hidden, true);
+  chart.hitArea.dispatch("pointerdown", { pointerType: "touch", clientX: 50 });
+  assert.ok(chart.tooltip.innerHTML.includes("2026-09-08"));
+  assert.equal(chart.tooltip.innerHTMLWrites, 1);
 });

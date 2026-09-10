@@ -2,9 +2,12 @@ package dashboard
 
 import (
 	"sort"
+	"time"
 
 	"github.com/NERVEbing/copilot-api-dashboard/internal/upstream"
 )
+
+const maxFilledLifetimeDays = 366
 
 func addTotals(dst *upstream.Totals, src upstream.Totals) {
 	dst.Input += src.Input
@@ -68,11 +71,58 @@ func mergeDay(dst []Day, src upstream.Day) []Day {
 		}
 	}
 	if index < 0 {
-		dst = append(dst, Day{Date: src.Date, Models: []upstream.Model{}})
+		dst = append(dst, Day{Date: src.Date, Recorded: true, Models: []upstream.Model{}})
 		index = len(dst) - 1
 	}
+	dst[index].Recorded = true
 	addTotals(&dst[index].Totals, *src.Totals)
 	dst[index].Models = mergeModels(dst[index].Models, src.Models)
 	sort.Slice(dst, func(i, j int) bool { return dst[i].Date < dst[j].Date })
 	return dst
+}
+
+func fillDays(days []Day, period string, now time.Time) []Day {
+	if days == nil || period == "today" || period == "lifetime" && len(days) == 0 {
+		return days
+	}
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	start := today
+	switch period {
+	case "this_week":
+		start = start.AddDate(0, 0, -int((start.Weekday()+6)%7))
+	case "last_7_days":
+		start = start.AddDate(0, 0, -6)
+	case "this_month":
+		start = time.Date(start.Year(), start.Month(), 1, 0, 0, 0, 0, start.Location())
+	case "last_30_days":
+		start = start.AddDate(0, 0, -29)
+	case "lifetime":
+		start = start.AddDate(0, 0, -6)
+		for _, day := range days {
+			date, err := time.ParseInLocation("2006-01-02", day.Date, now.Location())
+			if err != nil {
+				return days
+			}
+			if date.Before(start) {
+				start = date
+			}
+		}
+		if start.AddDate(0, 0, maxFilledLifetimeDays-1).Before(today) {
+			return days
+		}
+	default:
+		return days
+	}
+	byDate := make(map[string]bool, len(days))
+	for _, day := range days {
+		byDate[day.Date] = true
+	}
+	for date := start; !date.After(today); date = date.AddDate(0, 0, 1) {
+		key := date.Format("2006-01-02")
+		if !byDate[key] {
+			days = append(days, Day{Date: key, Totals: upstream.Totals{Costs: []upstream.Cost{}}, Models: []upstream.Model{}})
+		}
+	}
+	sort.Slice(days, func(i, j int) bool { return days[i].Date < days[j].Date })
+	return days
 }

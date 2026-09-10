@@ -81,7 +81,7 @@ func TestSaveDailyAccumulatesResetSegmentsAndSurvivesRestart(t *testing.T) {
 			t.Error(err)
 		}
 	}()
-	days, found, err := store.LoadDaily(ctx, "docker", "account-a", "ALICE", "lifetime", day2Start.Add(time.Hour))
+	days, found, err := store.LoadDaily(ctx, "account-a", "http://account-a:4141", "ALICE", "lifetime", day2Start.Add(time.Hour))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,7 +132,7 @@ func TestSaveDailyFinalizesPreviousDayBeforeFreezing(t *testing.T) {
 			testDay("2026-09-09", day2Start, 20, 2, "model-b"))); err != nil {
 		t.Fatal(err)
 	}
-	days, found, err := store.LoadDaily(ctx, "docker", "account-a", "Alice", "lifetime", day2Start.Add(3*time.Hour))
+	days, found, err := store.LoadDaily(ctx, "account-a", "http://account-a:4141", "Alice", "lifetime", day2Start.Add(3*time.Hour))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -195,7 +195,7 @@ func TestSaveDailyRejectsIncompleteCurrentDetails(t *testing.T) {
 			}
 		})
 	}
-	days, found, err := store.LoadDaily(ctx, "yaml", "source-a", "Alice", "lifetime", now)
+	days, found, err := store.LoadDaily(ctx, "source-a", "http://example", "Alice", "lifetime", now)
 	if err != nil || !found || len(days) != 1 || days[0].Totals.Tokens != 100 ||
 		len(days[0].Totals.Costs) != 1 || days[0].Totals.Costs[0].Nanos != 10 || len(days[0].Models) != 1 {
 		t.Fatalf("reliable snapshot changed: found=%v days=%+v err=%v", found, days, err)
@@ -221,11 +221,11 @@ func TestLoadDailyFiltersPeriodAndSource(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	days, found, err := store.LoadDaily(ctx, "yaml", "source-a", "Alice", "today", now)
+	days, found, err := store.LoadDaily(ctx, "source-a", "http://example", "Alice", "today", now)
 	if err != nil || !found || len(days) != 1 || days[0].Totals.Tokens != 20 {
 		t.Fatalf("period filter: found=%v days=%+v err=%v", found, days, err)
 	}
-	missing, found, err := store.LoadDaily(ctx, "yaml", "missing", "Alice", "lifetime", now)
+	missing, found, err := store.LoadDaily(ctx, "missing", "http://missing", "Alice", "lifetime", now)
 	if err != nil || found || missing != nil {
 		t.Fatalf("source isolation: found=%v days=%+v err=%v", found, missing, err)
 	}
@@ -243,15 +243,108 @@ func TestLoadDailyDistinguishesMissingAndEmptySnapshots(t *testing.T) {
 		}
 	}()
 	now := time.Date(2026, 9, 9, 12, 0, 0, 0, time.Local)
-	days, found, err := store.LoadDaily(ctx, "yaml", "source-a", "Alice", "lifetime", now)
+	days, found, err := store.LoadDaily(ctx, "source-a", "http://example", "Alice", "lifetime", now)
 	if err != nil || found || days != nil {
 		t.Fatalf("missing snapshot: found=%v days=%+v err=%v", found, days, err)
 	}
 	if err := store.SaveDaily(ctx, "yaml", "source-a", "http://example", "Alice", testDaily(now.UnixMilli())); err != nil {
 		t.Fatal(err)
 	}
-	days, found, err = store.LoadDaily(ctx, "yaml", "source-a", "Alice", "lifetime", now)
+	days, found, err = store.LoadDaily(ctx, "source-a", "http://example", "Alice", "lifetime", now)
 	if err != nil || !found || days == nil || len(days) != 0 {
 		t.Fatalf("empty snapshot: found=%v days=%+v err=%v", found, days, err)
+	}
+}
+
+func TestSourceIdentitySurvivesDiscoveryChanges(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 9, 9, 12, 0, 0, 0, time.Local)
+	tests := []struct {
+		name              string
+		yamlName, yamlURL string
+	}{
+		{name: "matching URL", yamlName: "configured-account", yamlURL: "http://account-a:4141"},
+		{name: "matching name", yamlName: "account-a", yamlURL: "https://proxy.example/copilot"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store, err := Open(filepath.Join(t.TempDir(), "dashboard.sqlite"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() {
+				if err := store.Close(); err != nil {
+					t.Error(err)
+				}
+			}()
+			day := testDay("2026-09-09", time.Date(2026, 9, 9, 0, 0, 0, 0, time.Local), 100, 10, "model-a")
+			if err := store.SaveDaily(ctx, "docker", "account-a", "http://account-a:4141", "Alice", testDaily(now.UnixMilli(), day)); err != nil {
+				t.Fatal(err)
+			}
+			days, found, err := store.LoadDaily(ctx, test.yamlName, test.yamlURL, "Alice", "lifetime", now)
+			if err != nil || !found || len(days) != 1 || days[0].Totals.Tokens != 100 {
+				t.Fatalf("history not preserved: found=%v days=%+v err=%v", found, days, err)
+			}
+			day.Totals.Tokens = 110
+			day.Totals.Input = 109
+			if err := store.SaveDaily(ctx, "yaml", test.yamlName, test.yamlURL, "Alice", testDaily(now.Add(time.Hour).UnixMilli(), day)); err != nil {
+				t.Fatal(err)
+			}
+			var sources, accounts int
+			if err := store.db.QueryRow("SELECT COUNT(*) FROM sources").Scan(&sources); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.db.QueryRow("SELECT COUNT(*) FROM accounts").Scan(&accounts); err != nil {
+				t.Fatal(err)
+			}
+			if sources != 1 || accounts != 1 {
+				t.Fatalf("history split: sources=%d accounts=%d", sources, accounts)
+			}
+			var sourceType, name, normalizedURL string
+			if err := store.db.QueryRow("SELECT source_type, name, normalized_url FROM sources").Scan(&sourceType, &name, &normalizedURL); err != nil {
+				t.Fatal(err)
+			}
+			if sourceType != "yaml" || name != test.yamlName || normalizedURL != test.yamlURL {
+				t.Fatalf("source metadata not updated: type=%s name=%s url=%s", sourceType, name, normalizedURL)
+			}
+			days, found, err = store.LoadDaily(ctx, test.yamlName, test.yamlURL, "Alice", "lifetime", now.Add(2*time.Hour))
+			if err != nil || !found || len(days) != 1 || days[0].Totals.Tokens != 110 {
+				t.Fatalf("updated history unavailable: found=%v days=%+v err=%v", found, days, err)
+			}
+		})
+	}
+}
+
+func TestSourceIdentityRejectsAmbiguousMatches(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(filepath.Join(t.TempDir(), "dashboard.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := store.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+	now := time.Date(2026, 9, 9, 12, 0, 0, 0, time.Local)
+	day := testDay("2026-09-09", time.Date(2026, 9, 9, 0, 0, 0, 0, time.Local), 100, 10, "model-a")
+	if err := store.SaveDaily(ctx, "docker", "account-a", "http://account-a:4141", "Alice", testDaily(now.UnixMilli(), day)); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SaveDaily(ctx, "yaml", "account-b", "http://account-b:4141", "Bob", testDaily(now.UnixMilli(), day)); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SaveDaily(ctx, "yaml", "account-a", "http://account-b:4141", "Alice", testDaily(now.Add(time.Hour).UnixMilli(), day)); err == nil || err.Error() != "persisted source identity is ambiguous" {
+		t.Fatalf("ambiguous source error: %v", err)
+	}
+	var sources, accounts int
+	if err := store.db.QueryRow("SELECT COUNT(*) FROM sources").Scan(&sources); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.db.QueryRow("SELECT COUNT(*) FROM accounts").Scan(&accounts); err != nil {
+		t.Fatal(err)
+	}
+	if sources != 2 || accounts != 2 {
+		t.Fatalf("ambiguous source changed database: sources=%d accounts=%d", sources, accounts)
 	}
 }
