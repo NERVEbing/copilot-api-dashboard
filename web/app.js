@@ -64,15 +64,19 @@ function costValue(costs) {
   return costs?.length === 1 && numeric(costs[0].total_cost_nanos) ? costs[0].total_cost_nanos : null;
 }
 
+function validMeteredQuota(quota) {
+  return quota?.unlimited === false && numeric(quota.entitlement) && quota.entitlement > 0 && numeric(quota.remaining);
+}
+
 function usedValue(quota) {
-  return quota?.unlimited === false && numeric(quota.entitlement) && numeric(quota.remaining) ? quota.entitlement - quota.remaining : null;
+  return validMeteredQuota(quota) ? quota.entitlement - quota.remaining : null;
 }
 
 function usedPercentValue(quota) {
-  if (quota?.unlimited !== false) return null;
+  if (!validMeteredQuota(quota)) return null;
   if (numeric(quota.percent_remaining)) return 100 - quota.percent_remaining;
   const used = usedValue(quota);
-  return numeric(used) && numeric(quota.entitlement) && quota.entitlement > 0 ? used / quota.entitlement * 100 : null;
+  return numeric(used) ? used / quota.entitlement * 100 : null;
 }
 
 function metric(label, value) {
@@ -86,11 +90,12 @@ function quotaUsed(quota) {
 
 function quotaRemaining(quota) {
   if (quota?.unlimited === true) return "Unlimited";
-  return number(quota?.remaining);
+  return validMeteredQuota(quota) ? number(quota.remaining) : "—";
 }
 
 function quotaTotal(quota) {
-  return quota?.unlimited === true ? "Unlimited" : number(quota?.entitlement);
+  if (quota?.unlimited === true) return "Unlimited";
+  return validMeteredQuota(quota) ? number(quota.entitlement) : "—";
 }
 
 function quotaUsage(quota) {
@@ -107,7 +112,7 @@ function renderQuotas(account) {
   $("quotas").innerHTML = [["chat", "Chat"], ["completions", "Completions"], ["premium_interactions", "Premium interactions"]].map(([key, label]) => {
     const q = account?.quota_snapshots?.[key];
     const unlimited = q?.unlimited === true;
-    const usedPercent = !unlimited && numeric(q?.percent_remaining) ? 100 - q.percent_remaining : null;
+    const usedPercent = usedPercentValue(q);
     const progress = unlimited ? 100 : numeric(usedPercent) ? Math.min(100, Math.max(0, usedPercent)) : null;
     return `<article class="quota"><div class="quota-top"><h3>${label}</h3><span class="${unlimited ? "unlimited" : "muted"}">${unlimited ? "Unlimited" : numeric(usedPercent) ? `${percent(usedPercent)}% used` : "—"}</span></div>
       ${progress === null ? empty() : `<progress value="${progress}" max="100" aria-label="${label}: ${unlimited ? "unlimited" : `${percent(usedPercent)}% used`}"></progress>`}
@@ -242,7 +247,7 @@ function renderModels(models) {
 function renderAccounts(accounts) {
   if (!accounts.length) { $("accounts").innerHTML = empty("No accounts available."); return; }
   $("accounts").innerHTML = sortableTable("accounts", "Account usage", ["Account", "Plan", "Usage", "Used", "Remaining", "Total", "Tokens", "Requests", "Cost"], accounts,
-    [(a) => a.login, (a) => a.copilot_plan, (a) => usedPercentValue(a.quota_snapshots?.premium_interactions), (a) => usedValue(a.quota_snapshots?.premium_interactions), (a) => a.quota_snapshots?.premium_interactions?.unlimited === false ? a.quota_snapshots.premium_interactions.remaining : null, (a) => a.quota_snapshots?.premium_interactions?.unlimited === false ? a.quota_snapshots.premium_interactions.entitlement : null, (a) => a.totals?.total_tokens, (a) => a.totals?.request_count, (a) => costValue(a.totals?.costs)],
+    [(a) => a.login, (a) => a.copilot_plan, (a) => usedPercentValue(a.quota_snapshots?.premium_interactions), (a) => usedValue(a.quota_snapshots?.premium_interactions), (a) => validMeteredQuota(a.quota_snapshots?.premium_interactions) ? a.quota_snapshots.premium_interactions.remaining : null, (a) => validMeteredQuota(a.quota_snapshots?.premium_interactions) ? a.quota_snapshots.premium_interactions.entitlement : null, (a) => a.totals?.total_tokens, (a) => a.totals?.request_count, (a) => costValue(a.totals?.costs)],
     (a) => `<tr><td class="text-cell">${escapeHTML(a.login)}</td><td>${escapeHTML(a.copilot_plan)}</td><td class="number">${quotaUsage(a.quota_snapshots?.premium_interactions)}</td><td class="number">${quotaUsed(a.quota_snapshots?.premium_interactions)}</td><td class="number">${quotaRemaining(a.quota_snapshots?.premium_interactions)}</td><td class="number">${quotaTotal(a.quota_snapshots?.premium_interactions)}</td><td class="number">${tokens(a.totals?.total_tokens)}</td><td class="number">${number(a.totals?.request_count)}</td><td class="number">${money(a.totals?.costs)}</td></tr>`, (a) => a.totals?.costs);
 }
 

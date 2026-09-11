@@ -111,20 +111,48 @@ test("account quota usage percentage is visual and sorted descending by default"
   run(`const accounts = [
     {login:'Missing'},
     {login:'Unlimited',quota_snapshots:{premium_interactions:{unlimited:true}}},
+    {login:'ZeroQuota',quota_snapshots:{premium_interactions:{unlimited:false,remaining:0,entitlement:0,percent_remaining:0}}},
     {login:'AbsoluteHigh',quota_snapshots:{premium_interactions:{unlimited:false,remaining:800,entitlement:1000}}},
     {login:'PercentHigh',quota_snapshots:{premium_interactions:{unlimited:false,remaining:10,entitlement:100,percent_remaining:10}}},
     {login:'RemainingLow',quota_snapshots:{premium_interactions:{unlimited:false,remaining:1,entitlement:300}}}
   ]; renderAccounts(accounts);`);
   const names = () => [...element("accounts").innerHTML.matchAll(/class="text-cell">([^<]+)/g)].map((match) => match[1]);
-  assert.deepEqual(names(), ["RemainingLow", "PercentHigh", "AbsoluteHigh", "Missing", "Unlimited"]);
+  assert.deepEqual(names(), ["RemainingLow", "PercentHigh", "AbsoluteHigh", "Missing", "Unlimited", "ZeroQuota"]);
   assert.ok(element("accounts").innerHTML.includes(">Usage "));
   assert.ok(element("accounts").innerHTML.includes(">Total "));
   assert.ok(!element("accounts").innerHTML.includes("Premium"));
   assert.ok(!element("accounts").innerHTML.includes('scope="colgroup"'));
   assert.ok(element("accounts").innerHTML.includes('<progress value="90" max="100" aria-label="90% used"></progress><span class="quota-usage-value">90%</span>'));
   assert.ok(element("accounts").innerHTML.includes('<span class="unlimited">Unlimited</span>'));
-  assert.ok(run("quotaUsage({unlimited:false,percent_remaining:-4.2})").includes('class="quota-usage exhausted"><progress value="100" max="100" aria-label="104.2% used"></progress><span class="quota-usage-value">104.2%</span>'));
-  assert.equal(run("usedPercentValue({unlimited:false,entitlement:0,remaining:0})"), null);
+  assert.ok(run("quotaUsage({unlimited:false,entitlement:100,remaining:0,percent_remaining:-4.2})").includes('class="quota-usage exhausted"><progress value="100" max="100" aria-label="104.2% used"></progress><span class="quota-usage-value">104.2%</span>'));
+  assert.equal(run("usedPercentValue({unlimited:false,entitlement:0,remaining:0,percent_remaining:0})"), null);
+  assert.equal(run("quotaUsage({unlimited:false,entitlement:0,remaining:0,percent_remaining:0})"), "—");
+});
+
+test("account quota cards treat zero entitlement as unavailable", () => {
+  const { run, element } = app();
+  run(`renderQuotas({quota_snapshots:{premium_interactions:{unlimited:false,remaining:0,entitlement:0,percent_remaining:0}}})`);
+  const html = element("quotas").innerHTML;
+  assert.ok(html.includes("Premium interactions"));
+  assert.ok(!html.includes("100% used"));
+  assert.ok(!html.includes("Premium interactions: 100% used"));
+  assert.equal((html.match(/<progress /g) ?? []).length, 0);
+  assert.ok(html.includes("— used / —"));
+  assert.ok(html.includes("— remaining"));
+});
+
+test("account quota cards preserve metered, unlimited, and over-quota states", () => {
+  const { run, element } = app();
+  run(`renderQuotas({quota_snapshots:{
+    chat:{unlimited:false,remaining:150,entitlement:200,percent_remaining:75},
+    completions:{unlimited:true},
+    premium_interactions:{unlimited:false,remaining:0,entitlement:100,percent_remaining:-4.2}
+  }})`);
+  const html = element("quotas").innerHTML;
+  assert.ok(html.includes("Chat: 25% used"));
+  assert.ok(html.includes("Unlimited"));
+  assert.ok(html.includes("Premium interactions: 104.2% used"));
+  assert.ok(html.includes("<span>100 used / 100</span>"));
 });
 
 test("cost sorting permits a single currency and resets when currencies become incomparable", () => {
@@ -144,18 +172,22 @@ test("account quota absolute values remain independently sortable", () => {
   run(`const accounts = [
     {login:'Missing'},
     {login:'Unlimited',quota_snapshots:{premium_interactions:{unlimited:true}}},
+    {login:'ZeroQuota',quota_snapshots:{premium_interactions:{unlimited:false,remaining:0,entitlement:0,percent_remaining:0}}},
     {login:'AbsoluteHigh',quota_snapshots:{premium_interactions:{unlimited:false,remaining:800,entitlement:1000}}},
     {login:'PercentHigh',quota_snapshots:{premium_interactions:{unlimited:false,remaining:10,entitlement:100}}},
     {login:'RemainingLow',quota_snapshots:{premium_interactions:{unlimited:false,remaining:1,entitlement:300}}}
   ]; sorts.accounts = {column:3,direction:-1}; renderAccounts(accounts);`);
   const names = () => [...element("accounts").innerHTML.matchAll(/class="text-cell">([^<]+)/g)].map((match) => match[1]);
-  assert.deepEqual(names(), ["RemainingLow", "AbsoluteHigh", "PercentHigh", "Missing", "Unlimited"]);
+  assert.deepEqual(names(), ["RemainingLow", "AbsoluteHigh", "PercentHigh", "Missing", "Unlimited", "ZeroQuota"]);
   run("sorts.accounts = {column:4,direction:1}; renderAccounts(accounts)");
-  assert.deepEqual(names(), ["RemainingLow", "PercentHigh", "AbsoluteHigh", "Missing", "Unlimited"]);
+  assert.deepEqual(names(), ["RemainingLow", "PercentHigh", "AbsoluteHigh", "Missing", "Unlimited", "ZeroQuota"]);
   run("sorts.accounts = {column:5,direction:-1}; renderAccounts(accounts)");
-  assert.deepEqual(names(), ["AbsoluteHigh", "RemainingLow", "PercentHigh", "Missing", "Unlimited"]);
+  assert.deepEqual(names(), ["AbsoluteHigh", "RemainingLow", "PercentHigh", "Missing", "Unlimited", "ZeroQuota"]);
   assert.ok(element("accounts").innerHTML.includes('>1,000</td>'));
   assert.equal(run("quotaTotal(accounts[1].quota_snapshots.premium_interactions)"), "Unlimited");
+  assert.equal(run("quotaUsed(accounts[2].quota_snapshots.premium_interactions)"), "—");
+  assert.equal(run("quotaRemaining(accounts[2].quota_snapshots.premium_interactions)"), "—");
+  assert.equal(run("quotaTotal(accounts[2].quota_snapshots.premium_interactions)"), "—");
   assert.equal(run("quotaTotal(null)"), "—");
 });
 
