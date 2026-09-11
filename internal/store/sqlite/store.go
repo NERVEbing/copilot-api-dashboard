@@ -147,6 +147,7 @@ type usageSegment struct {
 }
 
 type persistedDay struct {
+	startMS     int64
 	endMS       int64
 	snapshotEnd int64
 	totals      upstream.Totals
@@ -356,11 +357,18 @@ func findResetDate(segment *usageSegment, snapshotEnd int64, days []upstream.Day
 		if stored == nil || snapshotEnd < stored.snapshotEnd {
 			continue
 		}
-		if totalsRegressed(stored.totals, *day.Totals) && (resetDate == "" || day.Date < resetDate) {
+		if snapshotReset(stored, day) && (resetDate == "" || day.Date < resetDate) {
 			resetDate = day.Date
 		}
 	}
 	return resetDate
+}
+
+func snapshotReset(stored *persistedDay, current upstream.Day) bool {
+	// A rebuilt upstream database can catch up with old totals between syncs.
+	// Only use a later lifetime start when it cannot overlap the saved interval.
+	return totalsRegressed(stored.totals, *current.Totals) ||
+		(current.StartMS > stored.startMS && current.StartMS >= stored.endMS)
 }
 
 func validateDetails(ctx context.Context, tx *sql.Tx, segment *usageSegment, snapshotEnd int64, days []upstream.Day, storedDays map[string]*persistedDay) error {
@@ -383,7 +391,7 @@ func validateDetails(ctx context.Context, tx *sql.Tx, segment *usageSegment, sna
 }
 
 func loadMutableDays(ctx context.Context, tx *sql.Tx, segmentID int64) (map[string]*persistedDay, error) {
-	rows, err := tx.QueryContext(ctx, `SELECT date, end_ms, snapshot_end_ms, input_tokens, output_tokens,
+	rows, err := tx.QueryContext(ctx, `SELECT date, start_ms, end_ms, snapshot_end_ms, input_tokens, output_tokens,
 		cache_read_input_tokens, cache_creation_input_tokens, request_count, total_tokens, total_nano_aiu
 		FROM daily_usage WHERE segment_id = ? AND end_ms = snapshot_end_ms`, segmentID)
 	if err != nil {
@@ -394,7 +402,7 @@ func loadMutableDays(ctx context.Context, tx *sql.Tx, segmentID int64) (map[stri
 		var date string
 		var nano sql.NullInt64
 		stored := &persistedDay{models: map[string]upstream.Totals{}}
-		if err := rows.Scan(&date, &stored.endMS, &stored.snapshotEnd, &stored.totals.Input, &stored.totals.Output,
+		if err := rows.Scan(&date, &stored.startMS, &stored.endMS, &stored.snapshotEnd, &stored.totals.Input, &stored.totals.Output,
 			&stored.totals.CacheRead, &stored.totals.CacheCreation, &stored.totals.Requests,
 			&stored.totals.Tokens, &nano); err != nil {
 			_ = rows.Close()

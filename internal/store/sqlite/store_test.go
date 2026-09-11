@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -28,6 +29,101 @@ func testDaily(snapshotEnd int64, days ...upstream.Day) *upstream.Daily {
 		}
 	}
 	return &upstream.Daily{Summary: upstream.Summary{Range: upstream.Range{EndMS: snapshotEnd}}, Days: snapshotDays}
+}
+
+func TestSaveDailyDetectsNonOverlappingRebuild(t *testing.T) {
+	for _, gap := range []time.Duration{0, time.Minute} {
+		t.Run(gap.String(), func(t *testing.T) {
+			ctx := context.Background()
+			path := filepath.Join(t.TempDir(), "dashboard.sqlite")
+			store, err := Open(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = store.Close() }()
+			start := time.Date(2026, 9, 11, 0, 0, 0, 0, time.Local)
+			oldEnd := start.Add(9 * time.Hour)
+			old := testDay("2026-09-11", start, 61, 522000, "claude-sonnet-5")
+			if err := store.SaveDaily(ctx, "docker", "source-a", "http://example", "Alice", testDaily(oldEnd.UnixMilli(), old)); err != nil {
+				t.Fatal(err)
+			}
+			// Reopen the existing database before recovering the interrupted history.
+			if err := store.Close(); err != nil {
+				t.Fatal(err)
+			}
+			store, err = Open(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			newStart := oldEnd.Add(gap)
+			for i, tokens := range []int64{1000, 1000, 1200} {
+				current := testDay("2026-09-11", newStart, tokens, tokens*1000, "gpt-5.6-sol")
+				current.Totals.Requests = 10
+				current.Totals.Output = 50
+				current.Totals.Input = tokens - 50
+				current.Models[0].Totals = *current.Totals
+				end := oldEnd.Add(time.Duration(i+1) * time.Hour)
+				if err := store.SaveDaily(ctx, "docker", "source-a", "http://example", "Alice", testDaily(end.UnixMilli(), current)); err != nil {
+					t.Fatal(err)
+				}
+				var segments int
+				if err := store.db.QueryRow("SELECT COUNT(*) FROM usage_segments").Scan(&segments); err != nil || segments != 2 {
+					t.Fatalf("segments=%d err=%v", segments, err)
+				}
+				days, found, err := store.LoadDaily(ctx, "source-a", "http://example", "Alice", "lifetime", end)
+				if err != nil || !found || len(days) != 1 {
+					t.Fatalf("load: days=%+v found=%v err=%v", days, found, err)
+				}
+				day := days[0]
+				if day.Totals.Tokens != 61+tokens || day.Totals.Requests != 11 ||
+					len(day.Totals.Costs) != 1 || day.Totals.Costs[0].Nanos != 522000+tokens*1000 ||
+					len(day.Models) != 2 || day.Models[0].Model != "claude-sonnet-5" || day.Models[0].Tokens != 61 ||
+					day.Models[1].Model != "gpt-5.6-sol" || day.Models[1].Tokens != tokens {
+					t.Fatalf("unexpected accumulated usage: %+v", day)
+				}
+			}
+		})
+	}
+}
+
+func TestSaveDailyKeepsReliableHistoryForOverlappingOrStaleSnapshots(t *testing.T) {
+	for _, stale := range []bool{false, true} {
+		t.Run(map[bool]string{false: "overlapping", true: "stale"}[stale], func(t *testing.T) {
+			ctx := context.Background()
+			store, err := Open(filepath.Join(t.TempDir(), "dashboard.sqlite"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = store.Close() }()
+			start := time.Date(2026, 9, 11, 0, 0, 0, 0, time.Local)
+			end := start.Add(10 * time.Hour)
+			if err := store.SaveDaily(ctx, "docker", "source-a", "http://example", "Alice",
+				testDaily(end.UnixMilli(), testDay("2026-09-11", start, 61, 10, "old-model"))); err != nil {
+				t.Fatal(err)
+			}
+			before, _, err := store.LoadDaily(ctx, "source-a", "http://example", "Alice", "lifetime", end)
+			if err != nil {
+				t.Fatal(err)
+			}
+			currentEnd := end.Add(time.Hour)
+			if stale {
+				currentEnd = end.Add(-time.Minute)
+			}
+			current := testDay("2026-09-11", end.Add(-time.Hour), 1000, 100, "new-model")
+			err = store.SaveDaily(ctx, "docker", "source-a", "http://example", "Alice", testDaily(currentEnd.UnixMilli(), current))
+			if stale && err != nil || !stale && (err == nil || err.Error() != "daily usage snapshot is incomplete") {
+				t.Fatalf("save error: %v", err)
+			}
+			after, _, err := store.LoadDaily(ctx, "source-a", "http://example", "Alice", "lifetime", end)
+			if err != nil || !reflect.DeepEqual(before, after) {
+				t.Fatalf("reliable history changed: before=%+v after=%+v err=%v", before, after, err)
+			}
+			var segments int
+			if err := store.db.QueryRow("SELECT COUNT(*) FROM usage_segments").Scan(&segments); err != nil || segments != 1 {
+				t.Fatalf("segments=%d err=%v", segments, err)
+			}
+		})
+	}
 }
 
 func TestSaveDailyAccumulatesResetSegmentsAndSurvivesRestart(t *testing.T) {
