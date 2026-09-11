@@ -74,7 +74,7 @@ func Parse(lookup func(string) (string, bool)) (Config, error) {
 }
 
 func basePath(value string) (string, error) {
-	if value == "" || strings.TrimSpace(value) != value || !strings.HasPrefix(value, "/") || strings.ContainsAny(value, "?#\\%") {
+	if value == "" || strings.TrimSpace(value) != value || !strings.HasPrefix(value, "/") || strings.HasPrefix(value, "//") || strings.HasPrefix(value, "/\\") || strings.ContainsAny(value, "?#\\%") {
 		return "", fmt.Errorf("invalid BASE_PATH")
 	}
 	if value != "/" {
