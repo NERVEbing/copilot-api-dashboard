@@ -149,7 +149,6 @@ function setupTrendInteraction(days, geometry) {
     guide.hidden = true;
     active.hidden = true;
     tooltip.hidden = true;
-    plot.style.paddingBottom = "";
   };
   const show = (index) => {
     if (index < 0 || index >= days.length) return;
@@ -164,21 +163,30 @@ function setupTrendInteraction(days, geometry) {
     active.hidden = false;
     tooltip.innerHTML = trendTooltip(days[index]);
     tooltip.hidden = false;
-    plot.style.paddingBottom = "";
 
-    const bounds = svg.getBoundingClientRect();
+    const bounds = svg.getBoundingClientRect(), plotBounds = plot.getBoundingClientRect();
     const scale = Math.min(bounds.width / width, bounds.height / height);
     const offsetX = (bounds.width - width * scale) / 2, offsetY = (bounds.height - height * scale) / 2;
     const tooltipWidth = tooltip.offsetWidth, tooltipHeight = tooltip.offsetHeight;
-    const screenX = offsetX + pointX * scale, screenY = offsetY + pointY * scale;
-    tooltip.style.left = `${Math.min(bounds.width - tooltipWidth - 8, Math.max(8, screenX - tooltipWidth / 2))}px`;
-    const above = screenY - tooltipHeight - 12, below = screenY + 12;
-    if (above >= 4) tooltip.style.top = `${above}px`;
-    else if (below + tooltipHeight <= bounds.height - 4) tooltip.style.top = `${below}px`;
+    const screenX = bounds.left - plotBounds.left + offsetX + pointX * scale;
+    const screenY = bounds.top - plotBounds.top + offsetY + pointY * scale;
+    const inset = 8, gap = 12;
+    const minLeft = inset, maxLeft = Math.max(minLeft, plotBounds.width - tooltipWidth - inset);
+    const minTop = inset, maxTop = Math.max(minTop, plotBounds.height - tooltipHeight - inset);
+    const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+    let tooltipLeft = clamp(screenX - tooltipWidth / 2, minLeft, maxLeft);
+    let tooltipTop;
+    const above = screenY - tooltipHeight - gap, below = screenY + gap;
+    if (above >= minTop) tooltipTop = above;
+    else if (below <= maxTop) tooltipTop = below;
     else {
-      tooltip.style.top = `${bounds.height + 8}px`;
-      plot.style.paddingBottom = `${tooltipHeight + 16}px`;
+      const besideLeft = screenX - tooltipWidth - gap, besideRight = screenX + gap;
+      if (besideLeft >= minLeft) tooltipLeft = besideLeft;
+      else if (besideRight <= maxLeft) tooltipLeft = besideRight;
+      tooltipTop = clamp(screenY - tooltipHeight / 2, minTop, maxTop);
     }
+    tooltip.style.left = `${tooltipLeft}px`;
+    tooltip.style.top = `${tooltipTop}px`;
   };
   const showAtPointer = (event) => {
     const bounds = svg.getBoundingClientRect();

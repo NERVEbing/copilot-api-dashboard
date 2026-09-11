@@ -20,10 +20,11 @@ function app(baseURI = "http://localhost/", fetchImpl = () => new Promise(() => 
     }, properties);
   };
   const guide = node(), active = node(), tooltip = node();
-  const svg = node({ getBoundingClientRect() { return { left: 0, width: 768, height: 220 }; } });
+  const svg = node({ getBoundingClientRect() { return { left: 0, top: 0, width: 768, height: 220 }; } });
   const hitArea = node();
   const plot = node({
     hidden: false,
+    getBoundingClientRect() { return { left: 0, top: 0, width: 768, height: 220 }; },
     querySelector(selector) { return ({ svg, ".chart-hit-area": hitArea, ".chart-guide": guide, ".chart-active": active, ".chart-tooltip": tooltip })[selector] ?? null; },
     focus() { this.dispatch("focus"); },
   });
@@ -269,4 +270,23 @@ test("touch selects the tapped date before focus and pointer events are limited 
   chart.hitArea.dispatch("pointerdown", { pointerType: "touch", clientX: 50 });
   assert.ok(chart.tooltip.innerHTML.includes("2026-09-08"));
   assert.equal(chart.tooltip.innerHTMLWrites, 1);
+});
+
+test("daily usage tooltip stays inside the plot without changing its layout", () => {
+  const { run, chart } = app();
+  chart.plot.getBoundingClientRect = () => ({ left: 100, top: 200, width: 800, height: 220 });
+  chart.svg.getBoundingClientRect = () => ({ left: 116, top: 204, width: 768, height: 220 });
+  run(`state.period = 'last_7_days'; renderTrend([
+    {date:'2026-09-08',recorded:true,totals:{total_tokens:300}},
+    {date:'2026-09-09',recorded:true,totals:{total_tokens:200}},
+    {date:'2026-09-10',recorded:true,totals:{total_tokens:140}}
+  ])`);
+  chart.hitArea.dispatch("pointermove", { clientX: 884 });
+  const left = Number.parseFloat(chart.tooltip.style.left);
+  const top = Number.parseFloat(chart.tooltip.style.top);
+  assert.ok(chart.tooltip.innerHTML.includes("2026-09-10"));
+  assert.equal(left, 570);
+  assert.ok(left >= 8 && left + chart.tooltip.offsetWidth <= 792);
+  assert.ok(top >= 8 && top + chart.tooltip.offsetHeight <= 212);
+  assert.equal(chart.plot.style.paddingBottom, undefined);
 });
