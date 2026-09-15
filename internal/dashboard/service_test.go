@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -21,12 +22,47 @@ func (d staticDiscovery) Discover(context.Context) ([]discovery.Endpoint, []disc
 	return append([]discovery.Endpoint(nil), d...), nil
 }
 
+type discoveryFunc func(context.Context) ([]discovery.Endpoint, []discovery.Failure)
+
+func (f discoveryFunc) Discover(ctx context.Context) ([]discovery.Endpoint, []discovery.Failure) {
+	return f(ctx)
+}
+
 type memoryHistory struct {
 	days        []upstream.Day
 	hasSnapshot bool
 	saveCalls   int
 	loadCalls   int
 	period      string
+}
+
+type synchronizedHistory struct {
+	mu        sync.Mutex
+	saveCalls map[string]int
+	save      func(context.Context, string)
+}
+
+func (h *synchronizedHistory) SaveDaily(ctx context.Context, _, name, _, _ string, _ *upstream.Daily) error {
+	h.mu.Lock()
+	if h.saveCalls == nil {
+		h.saveCalls = map[string]int{}
+	}
+	h.saveCalls[name]++
+	h.mu.Unlock()
+	if h.save != nil {
+		h.save(ctx, name)
+	}
+	return nil
+}
+
+func (h *synchronizedHistory) LoadDaily(context.Context, string, string, string, string, time.Time) ([]upstream.Day, bool, error) {
+	return nil, false, nil
+}
+
+func (h *synchronizedHistory) count(name string) int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.saveCalls[name]
 }
 
 func (h *memoryHistory) SaveDaily(_ context.Context, _, _, _, _ string, daily *upstream.Daily) error {
@@ -349,5 +385,365 @@ func TestSyncFetchesLifetimeAndCanTargetOneAccount(t *testing.T) {
 	failures, found = s.Sync(context.Background(), "missing")
 	if found || len(failures) != 1 || failures[0].Operation != "account" || history.saveCalls != 1 {
 		t.Fatalf("missing account sync: found=%v failures=%+v", found, failures)
+	}
+	failures, found = s.Sync(context.Background(), "alice")
+	if !found || len(failures) != 0 || a.count("/token-usage/daily") != 2 || history.saveCalls != 2 {
+		t.Fatalf("completed sync was retained: found=%v failures=%+v history=%+v", found, failures, history)
+	}
+}
+
+func TestConcurrentSyncsShareOneAccountTask(t *testing.T) {
+	started, release := make(chan struct{}), make(chan struct{})
+	var startOnce sync.Once
+	target := testTarget(t, "Alice", 100, "")
+	original := target.endpoint
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		target.mu.Lock()
+		target.calls[r.URL.Path]++
+		target.mu.Unlock()
+		if r.URL.Path == "/usage" {
+			_ = json.NewEncoder(w).Encode(upstream.Usage{Login: "Alice"})
+			return
+		}
+		if r.URL.Path == "/token-usage/daily" {
+			startOnce.Do(func() { close(started) })
+			<-release
+			totals := upstream.Totals{Tokens: 100, Costs: []upstream.Cost{}}
+			_ = json.NewEncoder(w).Encode(upstream.Daily{Summary: upstream.Summary{Period: "lifetime", Totals: &totals, Models: []upstream.Model{}}, Days: []upstream.Day{}})
+		}
+	}))
+	t.Cleanup(srv.Close)
+	target.endpoint = discovery.Endpoint{Name: original.Name, URL: srv.URL, Source: original.Source}
+	history := &synchronizedHistory{}
+	s := serviceFor(t, target)
+	s.History = history
+
+	const callers = 20
+	ready, begin := make(chan struct{}, callers), make(chan struct{})
+	results := make(chan []discovery.Failure, callers)
+	for range callers {
+		go func() {
+			ready <- struct{}{}
+			<-begin
+			failures, _ := s.Sync(context.Background(), "Alice")
+			results <- failures
+		}()
+	}
+	for range callers {
+		<-ready
+	}
+	close(begin)
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("account sync did not start")
+	}
+	time.Sleep(10 * time.Millisecond)
+	close(release)
+	for range callers {
+		if failures := <-results; len(failures) != 0 {
+			t.Fatalf("shared sync failed: %+v", failures)
+		}
+	}
+	if got := target.count("/token-usage/daily"); got != 1 || history.count("Alice") != 1 {
+		t.Fatalf("account task was not shared: daily=%d saves=%d", got, history.count("Alice"))
+	}
+}
+
+func TestSyncAccountKeyIncludesTaskIdentity(t *testing.T) {
+	base := resolved{
+		endpoint: discovery.Endpoint{Source: "yaml", Name: "account-a", URL: "http://example", APIKey: "secret-key"},
+		usage:    &upstream.Usage{Login: "Alice"},
+	}
+	baseKey := syncAccountKey(base)
+	if strings.Contains(baseKey, base.endpoint.APIKey) {
+		t.Fatal("sync account key contains the API key")
+	}
+
+	tests := []struct {
+		name   string
+		change func(*resolved)
+	}{
+		{name: "source", change: func(account *resolved) { account.endpoint.Source = "docker" }},
+		{name: "name", change: func(account *resolved) { account.endpoint.Name = "account-b" }},
+		{name: "URL", change: func(account *resolved) { account.endpoint.URL = "http://other" }},
+		{name: "credential", change: func(account *resolved) { account.endpoint.APIKey = "new-secret-key" }},
+		{name: "login", change: func(account *resolved) { account.usage = &upstream.Usage{Login: "Bob"} }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			changed := base
+			test.change(&changed)
+			if syncAccountKey(changed) == baseKey {
+				t.Fatalf("sync account key did not include %s", test.name)
+			}
+		})
+	}
+
+	caseVariant := base
+	caseVariant.usage = &upstream.Usage{Login: "alice"}
+	if syncAccountKey(caseVariant) != baseKey {
+		t.Fatal("login casing changed the sync account key")
+	}
+}
+
+func TestCredentialChangeDoesNotJoinRunningAccountTask(t *testing.T) {
+	oldStarted, newStarted, releaseOld := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	defer func() {
+		select {
+		case <-releaseOld:
+		default:
+			close(releaseOld)
+		}
+	}()
+	var oldOnce, newOnce sync.Once
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/usage" {
+			_ = json.NewEncoder(w).Encode(upstream.Usage{Login: "Alice"})
+			return
+		}
+		if r.URL.Path != "/token-usage/daily" {
+			http.NotFound(w, r)
+			return
+		}
+		switch r.Header.Get("x-api-key") {
+		case "old-key":
+			oldOnce.Do(func() { close(oldStarted) })
+			<-releaseOld
+		case "new-key":
+			newOnce.Do(func() { close(newStarted) })
+		default:
+			http.Error(w, "unexpected credential", http.StatusUnauthorized)
+			return
+		}
+		totals := upstream.Totals{Tokens: 100, Costs: []upstream.Cost{}}
+		_ = json.NewEncoder(w).Encode(upstream.Daily{Summary: upstream.Summary{Period: "lifetime", Totals: &totals, Models: []upstream.Model{}}, Days: []upstream.Day{}})
+	}))
+	t.Cleanup(srv.Close)
+
+	var endpointMu sync.RWMutex
+	endpoint := discovery.Endpoint{Source: "yaml", Name: "account-a", URL: srv.URL, APIKey: "old-key"}
+	discover := discoveryFunc(func(context.Context) ([]discovery.Endpoint, []discovery.Failure) {
+		endpointMu.RLock()
+		defer endpointMu.RUnlock()
+		return []discovery.Endpoint{endpoint}, nil
+	})
+	client := upstream.New(time.Second, 4)
+	t.Cleanup(client.Close)
+	s := &Service{Discovery: discover, Upstream: client, History: &synchronizedHistory{}}
+
+	results := make(chan []discovery.Failure, 2)
+	go func() {
+		failures, _ := s.Sync(context.Background(), "Alice")
+		results <- failures
+	}()
+	select {
+	case <-oldStarted:
+	case <-time.After(time.Second):
+		t.Fatal("old credential request did not start")
+	}
+
+	endpointMu.Lock()
+	endpoint.APIKey = "new-key"
+	endpointMu.Unlock()
+	go func() {
+		failures, _ := s.Sync(context.Background(), "Alice")
+		results <- failures
+	}()
+	select {
+	case <-newStarted:
+	case <-time.After(time.Second):
+		t.Fatal("new credential request joined the running old credential task")
+	}
+	close(releaseOld)
+	for range 2 {
+		if failures := <-results; len(failures) != 0 {
+			t.Fatalf("sync failed: %+v", failures)
+		}
+	}
+}
+
+func TestDifferentAccountsSyncConcurrently(t *testing.T) {
+	var active, peak atomic.Int32
+	secondStarted := make(chan struct{})
+	var secondOnce sync.Once
+	makeTarget := func(login string) *target {
+		target := testTarget(t, login, 100, "")
+		original := target.endpoint
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			target.mu.Lock()
+			target.calls[r.URL.Path]++
+			target.mu.Unlock()
+			if r.URL.Path == "/usage" {
+				_ = json.NewEncoder(w).Encode(upstream.Usage{Login: login})
+				return
+			}
+			if r.URL.Path == "/token-usage/daily" {
+				n := active.Add(1)
+				defer active.Add(-1)
+				for old := peak.Load(); n > old; old = peak.Load() {
+					if peak.CompareAndSwap(old, n) {
+						break
+					}
+				}
+				if n == 2 {
+					secondOnce.Do(func() { close(secondStarted) })
+				}
+				select {
+				case <-secondStarted:
+				case <-time.After(500 * time.Millisecond):
+				}
+				totals := upstream.Totals{Tokens: 100, Costs: []upstream.Cost{}}
+				_ = json.NewEncoder(w).Encode(upstream.Daily{Summary: upstream.Summary{Period: "lifetime", Totals: &totals, Models: []upstream.Model{}}, Days: []upstream.Day{}})
+			}
+		}))
+		t.Cleanup(srv.Close)
+		target.endpoint = discovery.Endpoint{Name: original.Name, URL: srv.URL, Source: original.Source}
+		return target
+	}
+	a, b := makeTarget("Alice"), makeTarget("Bob")
+	s := serviceFor(t, a, b)
+	s.History = &synchronizedHistory{}
+	begin := make(chan struct{})
+	results := make(chan []discovery.Failure, 2)
+	for _, login := range []string{"Alice", "Bob"} {
+		go func() {
+			<-begin
+			failures, _ := s.Sync(context.Background(), login)
+			results <- failures
+		}()
+	}
+	close(begin)
+	for range 2 {
+		if failures := <-results; len(failures) != 0 {
+			t.Fatalf("concurrent sync failed: %+v", failures)
+		}
+	}
+	if peak.Load() != 2 {
+		t.Fatalf("different accounts remained serialized: peak=%d", peak.Load())
+	}
+}
+
+func TestCanceledWaiterDoesNotCancelSharedAccountTask(t *testing.T) {
+	started, release := make(chan struct{}), make(chan struct{})
+	var startOnce sync.Once
+	target := testTarget(t, "Alice", 100, "")
+	original := target.endpoint
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		target.mu.Lock()
+		target.calls[r.URL.Path]++
+		target.mu.Unlock()
+		if r.URL.Path == "/usage" {
+			_ = json.NewEncoder(w).Encode(upstream.Usage{Login: "Alice"})
+			return
+		}
+		if r.URL.Path == "/token-usage/daily" {
+			startOnce.Do(func() { close(started) })
+			<-release
+			totals := upstream.Totals{Tokens: 100, Costs: []upstream.Cost{}}
+			_ = json.NewEncoder(w).Encode(upstream.Daily{Summary: upstream.Summary{Period: "lifetime", Totals: &totals, Models: []upstream.Model{}}, Days: []upstream.Day{}})
+		}
+	}))
+	t.Cleanup(srv.Close)
+	target.endpoint = discovery.Endpoint{Name: original.Name, URL: srv.URL, Source: original.Source}
+	history := &synchronizedHistory{}
+	s := serviceFor(t, target)
+	s.History = history
+
+	firstCtx, cancelFirst := context.WithCancel(context.Background())
+	firstResult := make(chan []discovery.Failure, 1)
+	go func() {
+		failures, _ := s.Sync(firstCtx, "Alice")
+		firstResult <- failures
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("account sync did not start")
+	}
+	secondStarted := make(chan struct{})
+	secondResult := make(chan []discovery.Failure, 1)
+	go func() {
+		close(secondStarted)
+		failures, _ := s.Sync(context.Background(), "Alice")
+		secondResult <- failures
+	}()
+	<-secondStarted
+	time.Sleep(10 * time.Millisecond)
+	cancelFirst()
+	select {
+	case failures := <-firstResult:
+		if len(failures) != 1 || failures[0].Message != "request canceled" {
+			t.Fatalf("canceled waiter result: %+v", failures)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("canceled waiter did not return")
+	}
+	close(release)
+	select {
+	case failures := <-secondResult:
+		if len(failures) != 0 {
+			t.Fatalf("shared task was canceled: %+v", failures)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("remaining waiter did not finish")
+	}
+	if target.count("/token-usage/daily") != 1 || history.count("Alice") != 1 {
+		t.Fatal("shared account task was repeated or not persisted")
+	}
+}
+
+func TestWaitForSyncDrainsAndStopsSharedTasks(t *testing.T) {
+	started, release := make(chan struct{}), make(chan struct{})
+	target := testTarget(t, "Alice", 100, "")
+	original := target.endpoint
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/usage" {
+			_ = json.NewEncoder(w).Encode(upstream.Usage{Login: "Alice"})
+			return
+		}
+		if r.URL.Path == "/token-usage/daily" {
+			close(started)
+			<-release
+			totals := upstream.Totals{Costs: []upstream.Cost{}}
+			_ = json.NewEncoder(w).Encode(upstream.Daily{Summary: upstream.Summary{Period: "lifetime", Totals: &totals, Models: []upstream.Model{}}, Days: []upstream.Day{}})
+		}
+	}))
+	t.Cleanup(srv.Close)
+	target.endpoint = discovery.Endpoint{Name: original.Name, URL: srv.URL, Source: original.Source}
+	s := serviceFor(t, target)
+	s.History = &synchronizedHistory{}
+	syncResult := make(chan []discovery.Failure, 1)
+	go func() {
+		failures, _ := s.Sync(context.Background(), "Alice")
+		syncResult <- failures
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("account sync did not start")
+	}
+	drained := make(chan struct{})
+	go func() {
+		s.WaitForSync()
+		close(drained)
+	}()
+	select {
+	case <-drained:
+		t.Fatal("active account sync was not drained")
+	case <-time.After(10 * time.Millisecond):
+	}
+	close(release)
+	select {
+	case <-drained:
+	case <-time.After(time.Second):
+		t.Fatal("sync drain did not finish")
+	}
+	if failures := <-syncResult; len(failures) != 0 {
+		t.Fatalf("drained sync failed: %+v", failures)
+	}
+	failures, _ := s.Sync(context.Background(), "Alice")
+	if len(failures) != 1 || failures[0].Message != "request canceled" {
+		t.Fatalf("new sync started after drain: %+v", failures)
 	}
 }

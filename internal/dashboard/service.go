@@ -2,10 +2,14 @@ package dashboard
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"sort"
 	"strings"
 	"sync"
 	"time"
+
+	"golang.org/x/sync/singleflight"
 
 	"github.com/NERVEbing/copilot-api-dashboard/internal/discovery"
 	"github.com/NERVEbing/copilot-api-dashboard/internal/upstream"
@@ -16,11 +20,17 @@ type Discovery interface {
 }
 
 type Service struct {
-	Discovery Discovery
-	Upstream  *upstream.Client
-	History   History
-	Now       func() time.Time
-	syncMu    sync.Mutex
+	Discovery   Discovery
+	Upstream    *upstream.Client
+	History     History
+	Now         func() time.Time
+	SyncContext context.Context
+	resolveSync singleflight.Group
+	accountSync singleflight.Group
+	syncTaskMu  sync.Mutex
+	syncTasks   int
+	syncStopped bool
+	syncDone    chan struct{}
 }
 
 type History interface {
@@ -62,6 +72,15 @@ type EventsResponse struct {
 type resolved struct {
 	endpoint discovery.Endpoint
 	usage    *upstream.Usage
+}
+
+type syncResolution struct {
+	accounts []resolved
+	failures []discovery.Failure
+}
+
+type accountSyncResult struct {
+	failure *discovery.Failure
 }
 
 func failure(e discovery.Endpoint, operation string, err error) discovery.Failure {
@@ -170,6 +189,120 @@ func (s *Service) now() time.Time {
 	return time.Now()
 }
 
+func (s *Service) syncContext() context.Context {
+	if s.SyncContext != nil {
+		return s.SyncContext
+	}
+	return context.Background()
+}
+
+func (s *Service) beginSyncTask() bool {
+	s.syncTaskMu.Lock()
+	defer s.syncTaskMu.Unlock()
+	if s.syncStopped {
+		return false
+	}
+	s.syncTasks++
+	return true
+}
+
+func (s *Service) finishSyncTask() {
+	s.syncTaskMu.Lock()
+	defer s.syncTaskMu.Unlock()
+	s.syncTasks--
+	if s.syncStopped && s.syncTasks == 0 {
+		close(s.syncDone)
+	}
+}
+
+// WaitForSync prevents new shared synchronization tasks and waits for active tasks to finish.
+func (s *Service) WaitForSync() {
+	s.syncTaskMu.Lock()
+	if !s.syncStopped {
+		s.syncStopped = true
+		s.syncDone = make(chan struct{})
+		if s.syncTasks == 0 {
+			close(s.syncDone)
+		}
+	}
+	done := s.syncDone
+	s.syncTaskMu.Unlock()
+	<-done
+}
+
+func (s *Service) resolveForSync(ctx context.Context) ([]resolved, []discovery.Failure, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
+	result := s.resolveSync.DoChan("sync", func() (any, error) {
+		if !s.beginSyncTask() {
+			return nil, context.Canceled
+		}
+		defer s.finishSyncTask()
+		accounts, failures := s.resolve(s.syncContext())
+		return syncResolution{accounts: accounts, failures: failures}, nil
+	})
+	select {
+	case <-ctx.Done():
+		return nil, nil, ctx.Err()
+	case value := <-result:
+		if value.Err != nil {
+			return nil, nil, value.Err
+		}
+		resolution := value.Val.(syncResolution)
+		return resolution.accounts, append([]discovery.Failure(nil), resolution.failures...), nil
+	}
+}
+
+func syncAccountKey(account resolved) string {
+	credential := sha256.Sum256([]byte(account.endpoint.APIKey))
+	return strings.Join([]string{
+		account.endpoint.Source,
+		account.endpoint.Name,
+		account.endpoint.URL,
+		strings.ToLower(account.usage.Login),
+		hex.EncodeToString(credential[:]),
+	}, "\x00")
+}
+
+func (s *Service) syncAccount(ctx context.Context, account resolved) *discovery.Failure {
+	if err := ctx.Err(); err != nil {
+		failure := failure(account.endpoint, "sync", err)
+		failure.Message = discovery.SafeMessage(err)
+		return &failure
+	}
+	result := s.accountSync.DoChan(syncAccountKey(account), func() (any, error) {
+		if !s.beginSyncTask() {
+			return nil, context.Canceled
+		}
+		defer s.finishSyncTask()
+		taskCtx := s.syncContext()
+		daily, err := s.Upstream.Daily(taskCtx, account.endpoint, "lifetime")
+		if err != nil {
+			value := failure(account.endpoint, "token-usage/daily", err)
+			return accountSyncResult{failure: &value}, nil
+		}
+		if err := s.History.SaveDaily(taskCtx, account.endpoint.Source, account.endpoint.Name, account.endpoint.URL, account.usage.Login, daily); err != nil {
+			value := failure(account.endpoint, "persistence", err)
+			return accountSyncResult{failure: &value}, nil
+		}
+		return accountSyncResult{}, nil
+	})
+	select {
+	case <-ctx.Done():
+		value := failure(account.endpoint, "sync", ctx.Err())
+		value.Message = discovery.SafeMessage(ctx.Err())
+		return &value
+	case value := <-result:
+		if value.Err != nil {
+			failure := failure(account.endpoint, "sync", value.Err)
+			failure.Message = discovery.SafeMessage(value.Err)
+			return &failure
+		}
+		return value.Val.(accountSyncResult).failure
+	}
+}
+
 func summarizeDays(days []upstream.Day) (*upstream.Totals, []upstream.Model) {
 	totals := &upstream.Totals{Costs: []upstream.Cost{}}
 	models := []upstream.Model{}
@@ -229,34 +362,27 @@ func (s *Service) Sync(ctx context.Context, login string) ([]discovery.Failure, 
 	if s.History == nil {
 		return []discovery.Failure{}, true
 	}
-	s.syncMu.Lock()
-	defer s.syncMu.Unlock()
-	accounts, failures := s.resolve(ctx)
-	found := login == ""
-	type fetched struct {
-		daily *upstream.Daily
-		err   error
+	accounts, failures, err := s.resolveForSync(ctx)
+	if err != nil {
+		return []discovery.Failure{{Target: "sync", Operation: "discovery", Message: discovery.SafeMessage(err)}}, login == ""
 	}
-	results := make([]fetched, len(accounts))
+	found := login == ""
+	results := make([]*discovery.Failure, len(accounts))
 	var wg sync.WaitGroup
 	for i, account := range accounts {
 		if login != "" && !strings.EqualFold(login, account.usage.Login) {
 			continue
 		}
 		found = true
-		wg.Go(func() { results[i].daily, results[i].err = s.Upstream.Daily(ctx, account.endpoint, "lifetime") })
+		wg.Go(func() { results[i] = s.syncAccount(ctx, account) })
 	}
 	wg.Wait()
 	for i, result := range results {
 		if login != "" && !strings.EqualFold(login, accounts[i].usage.Login) {
 			continue
 		}
-		if result.err != nil {
-			failures = append(failures, failure(accounts[i].endpoint, "token-usage/daily", result.err))
-			continue
-		}
-		if err := s.History.SaveDaily(ctx, accounts[i].endpoint.Source, accounts[i].endpoint.Name, accounts[i].endpoint.URL, accounts[i].usage.Login, result.daily); err != nil {
-			failures = append(failures, failure(accounts[i].endpoint, "persistence", err))
+		if result != nil {
+			failures = append(failures, *result)
 		}
 	}
 	if !found {

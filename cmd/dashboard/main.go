@@ -54,10 +54,12 @@ func run() error {
 	}
 	server := &http.Server{Addr: cfg.ListenAddr, Handler: httpserver.New(service, cfg.BasePath), ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 60 * time.Second}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	service.SyncContext = ctx
 	var background sync.WaitGroup
 	defer func() {
 		stop()
 		background.Wait()
+		service.WaitForSync()
 	}()
 	if service.History != nil {
 		background.Go(func() {
