@@ -49,7 +49,7 @@ func TestContractFixtures(t *testing.T) {
 	e := discovery.Endpoint{URL: srv.URL + basePath + "/", APIKey: "test-key"}
 	ctx := context.Background()
 	u, err := c.Usage(ctx, e)
-	if err != nil || u.Login != "Account-A" || !*u.Quotas.Chat.Unlimited || *u.Quotas.PremiumInteractions.Remaining != 270 {
+	if err != nil || u.Login != "Account-A" || !*u.Quotas.Chat.Unlimited || *u.Quotas.PremiumInteractions.Remaining != 270 || *u.Quotas.PremiumInteractions.CreditsUsed != 30 {
 		t.Fatalf("usage: %+v %v", u, err)
 	}
 	s, err := c.Summary(ctx, e, "last_30_days")

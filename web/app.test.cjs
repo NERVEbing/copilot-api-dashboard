@@ -111,11 +111,11 @@ test("account quota usage percentage is visual and sorted descending by default"
   const { run, element } = app();
   run(`const accounts = [
     {login:'Missing'},
-    {login:'Unlimited',quota_snapshots:{premium_interactions:{unlimited:true}}},
+    {login:'Unlimited',quota_snapshots:{premium_interactions:{unlimited:true,credits_used:26129}}},
     {login:'ZeroQuota',quota_snapshots:{premium_interactions:{unlimited:false,remaining:0,entitlement:0,percent_remaining:0}}},
-    {login:'AbsoluteHigh',quota_snapshots:{premium_interactions:{unlimited:false,remaining:800,entitlement:1000}}},
-    {login:'PercentHigh',quota_snapshots:{premium_interactions:{unlimited:false,remaining:10,entitlement:100,percent_remaining:10}}},
-    {login:'RemainingLow',quota_snapshots:{premium_interactions:{unlimited:false,remaining:1,entitlement:300}}}
+    {login:'AbsoluteHigh',quota_snapshots:{premium_interactions:{unlimited:false,credits_used:200,remaining:800,entitlement:1000}}},
+    {login:'PercentHigh',quota_snapshots:{premium_interactions:{unlimited:false,credits_used:90,remaining:10,entitlement:100,percent_remaining:10}}},
+    {login:'RemainingLow',quota_snapshots:{premium_interactions:{unlimited:false,credits_used:299,remaining:1,entitlement:300}}}
   ]; renderAccounts(accounts);`);
   const names = () => [...element("accounts").innerHTML.matchAll(/class="text-cell">([^<]+)/g)].map((match) => match[1]);
   assert.deepEqual(names(), ["RemainingLow", "PercentHigh", "AbsoluteHigh", "Missing", "Unlimited", "ZeroQuota"]);
@@ -145,15 +145,15 @@ test("account quota cards treat zero entitlement as unavailable", () => {
 test("account quota cards preserve metered, unlimited, and over-quota states", () => {
   const { run, element } = app();
   run(`renderQuotas({quota_snapshots:{
-    chat:{unlimited:false,remaining:150,entitlement:200,percent_remaining:75},
+    chat:{unlimited:false,credits_used:50,remaining:150,entitlement:200,percent_remaining:75},
     completions:{unlimited:true},
-    premium_interactions:{unlimited:false,remaining:0,entitlement:100,percent_remaining:-4.2}
+    premium_interactions:{unlimited:false,credits_used:104.2,remaining:0,entitlement:100,percent_remaining:-4.2}
   }})`);
   const html = element("quotas").innerHTML;
   assert.ok(html.includes("Chat: 25% used"));
   assert.ok(html.includes("Unlimited"));
   assert.ok(html.includes("Premium interactions: 104.2% used"));
-  assert.ok(html.includes("<span>100 used / 100</span>"));
+  assert.ok(html.includes("<span>104.2 used / 100</span>"));
 });
 
 test("cost sorting permits a single currency and resets when currencies become incomparable", () => {
@@ -174,9 +174,9 @@ test("account quota absolute values remain independently sortable", () => {
     {login:'Missing'},
     {login:'Unlimited',quota_snapshots:{premium_interactions:{unlimited:true}}},
     {login:'ZeroQuota',quota_snapshots:{premium_interactions:{unlimited:false,remaining:0,entitlement:0,percent_remaining:0}}},
-    {login:'AbsoluteHigh',quota_snapshots:{premium_interactions:{unlimited:false,remaining:800,entitlement:1000}}},
-    {login:'PercentHigh',quota_snapshots:{premium_interactions:{unlimited:false,remaining:10,entitlement:100}}},
-    {login:'RemainingLow',quota_snapshots:{premium_interactions:{unlimited:false,remaining:1,entitlement:300}}}
+    {login:'AbsoluteHigh',quota_snapshots:{premium_interactions:{unlimited:false,credits_used:200,remaining:800,entitlement:1000}}},
+    {login:'PercentHigh',quota_snapshots:{premium_interactions:{unlimited:false,credits_used:90,remaining:10,entitlement:100}}},
+    {login:'RemainingLow',quota_snapshots:{premium_interactions:{unlimited:false,credits_used:299,remaining:1,entitlement:300}}}
   ]; sorts.accounts = {column:3,direction:-1}; renderAccounts(accounts);`);
   const names = () => [...element("accounts").innerHTML.matchAll(/class="text-cell">([^<]+)/g)].map((match) => match[1]);
   assert.deepEqual(names(), ["RemainingLow", "AbsoluteHigh", "PercentHigh", "Missing", "Unlimited", "ZeroQuota"]);
@@ -190,6 +190,19 @@ test("account quota absolute values remain independently sortable", () => {
   assert.equal(run("quotaRemaining(accounts[2].quota_snapshots.premium_interactions)"), "—");
   assert.equal(run("quotaTotal(accounts[2].quota_snapshots.premium_interactions)"), "—");
   assert.equal(run("quotaTotal(null)"), "—");
+});
+
+test("quota used value follows credits_used for unlimited quotas", () => {
+  const { run } = app();
+  assert.equal(run("usedValue({unlimited:true,entitlement:0,remaining:0,credits_used:26129})"), 26129);
+  assert.equal(run("quotaUsed({unlimited:true,entitlement:0,remaining:0,credits_used:26129})"), "26,129");
+});
+
+test("quota usage percentage follows credits_used when it differs from percent_remaining", () => {
+  const { run } = app();
+  const quota = "{unlimited:false,credits_used:50,entitlement:100,remaining:50,percent_remaining:10}";
+  assert.equal(run(`usedPercentValue(${quota})`), 50);
+  assert.match(run(`quotaUsage(${quota})`), /50% used/);
 });
 
 test("Today hides daily usage, other periods restore it, and table sorting leaves chart chronological", () => {

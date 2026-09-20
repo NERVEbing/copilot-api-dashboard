@@ -69,14 +69,14 @@ function validMeteredQuota(quota) {
 }
 
 function usedValue(quota) {
-  return validMeteredQuota(quota) ? quota.entitlement - quota.remaining : null;
+  return numeric(quota?.credits_used) ? quota.credits_used : null;
 }
 
 function usedPercentValue(quota) {
   if (!validMeteredQuota(quota)) return null;
-  if (numeric(quota.percent_remaining)) return 100 - quota.percent_remaining;
   const used = usedValue(quota);
-  return numeric(used) ? used / quota.entitlement * 100 : null;
+  if (numeric(used)) return used / quota.entitlement * 100;
+  return numeric(quota.percent_remaining) ? 100 - quota.percent_remaining : null;
 }
 
 function metric(label, value) {
@@ -84,7 +84,6 @@ function metric(label, value) {
 }
 
 function quotaUsed(quota) {
-  if (quota?.unlimited === true) return "—";
   return number(usedValue(quota));
 }
 

@@ -1,6 +1,7 @@
 package upstream
 
 type Quota struct {
+	CreditsUsed      *float64 `json:"credits_used"`
 	Entitlement      *float64 `json:"entitlement"`
 	OverageCount     *float64 `json:"overage_count"`
 	OveragePermitted *bool    `json:"overage_permitted"`
