@@ -66,7 +66,7 @@ Use either `api_key_env` or `api_key`, not both. For Compose, uncomment the endp
 
 ### SQLite history
 
-SQLite currently stores daily usage history only. Enable it by uncommenting the persistence variables and `/data` volume in `docker-compose.yml`. History syncs at startup, periodically, and on Refresh; quotas and request events remain live.
+SQLite currently stores daily usage history only. Enable it by uncommenting the persistence variables and `/data` volume in `docker-compose.yml`. History syncs at startup, periodically, and on Refresh; quotas and request events remain live. Newer snapshots can correct previously stored past dates; dates omitted by upstream remain stored.
 
 ## Development
 

@@ -538,8 +538,7 @@ func replaceDay(ctx context.Context, tx *sql.Tx, segmentID, snapshotEnd int64, d
 		cache_creation_input_tokens=excluded.cache_creation_input_tokens,
 		request_count=excluded.request_count, total_tokens=excluded.total_tokens,
 		total_nano_aiu=excluded.total_nano_aiu
-	WHERE excluded.snapshot_end_ms >= daily_usage.snapshot_end_ms
-		AND daily_usage.end_ms = daily_usage.snapshot_end_ms`,
+	WHERE excluded.snapshot_end_ms >= daily_usage.snapshot_end_ms`,
 		segmentID, day.Date, day.StartMS, day.EndMS, snapshotEnd, day.Totals.Input, day.Totals.Output,
 		day.Totals.CacheRead, day.Totals.CacheCreation, day.Totals.Requests,
 		day.Totals.Tokens, nullableInt64(day.Totals.NanoAIU))

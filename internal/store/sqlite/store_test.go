@@ -199,50 +199,71 @@ func TestSaveDailyAccumulatesResetSegmentsAndSurvivesRestart(t *testing.T) {
 	}
 }
 
-func TestSaveDailyFinalizesPreviousDayBeforeFreezing(t *testing.T) {
-	ctx := context.Background()
-	store, err := Open(filepath.Join(t.TempDir(), "dashboard.sqlite"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() {
-		if err := store.Close(); err != nil {
-			t.Error(err)
-		}
-	}()
-	day1Start := time.Date(2026, 9, 8, 0, 0, 0, 0, time.Local)
-	day2Start := day1Start.AddDate(0, 0, 1)
-	if err := store.SaveDaily(ctx, "docker", "account-a", "http://account-a:4141", "Alice",
-		testDaily(day1Start.Add(12*time.Hour).UnixMilli(), testDay("2026-09-08", day1Start, 100, 10, "model-a"))); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.SaveDaily(ctx, "docker", "account-a", "http://account-a:4141", "Alice",
-		testDaily(day2Start.Add(time.Hour).UnixMilli(),
-			testDay("2026-09-08", day1Start, 120, 12, "model-a"),
-			testDay("2026-09-09", day2Start, 10, 1, "model-b"))); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.SaveDaily(ctx, "docker", "account-a", "http://account-a:4141", "Alice",
-		testDaily(day2Start.Add(2*time.Hour).UnixMilli(),
-			testDay("2026-09-08", day1Start, 1, 1, "incorrect-model"),
-			testDay("2026-09-09", day2Start, 20, 2, "model-b"))); err != nil {
-		t.Fatal(err)
-	}
-	days, found, err := store.LoadDaily(ctx, "account-a", "http://account-a:4141", "Alice", "lifetime", day2Start.Add(3*time.Hour))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !found || len(days) != 2 || days[0].Totals.Tokens != 120 || days[0].EndMS != day2Start.UnixMilli() ||
-		days[1].Totals.Tokens != 20 {
-		t.Fatalf("unexpected finalized days: %+v", days)
-	}
-	if len(days[0].Totals.Costs) != 1 || days[0].Totals.Costs[0].Nanos != 12 ||
-		len(days[0].Models) != 1 || days[0].Models[0].Model != "model-a" || days[0].Models[0].Tokens != 120 {
-		t.Fatalf("finalized day was overwritten: %+v", days[0])
-	}
-	var segments int
-	if err := store.db.QueryRow(`SELECT COUNT(*) FROM usage_segments`).Scan(&segments); err != nil || segments != 1 {
-		t.Fatalf("usage segments: count=%d err=%v", segments, err)
+func TestSaveDailyUpdatesClosedDays(t *testing.T) {
+	for _, tc := range []struct {
+		name                                           string
+		initialTokens, correctedTokens, cost, requests int64
+	}{
+		{"late usage", 120, 130, 13, 1},
+		{"reclassified usage", 120, 1, 1, 1},
+		{"corrected zero day", 0, 14842776, 4976060925, 186},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			store, err := Open(filepath.Join(t.TempDir(), "dashboard.sqlite"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = store.Close() }()
+			day1Start := time.Date(2026, 10, 2, 0, 0, 0, 0, time.Local)
+			day2Start := day1Start.AddDate(0, 0, 1)
+			original := testDay("2026-10-02", day1Start, tc.initialTokens, 12, "model-a")
+			if tc.initialTokens == 0 {
+				original.Totals = &upstream.Totals{Costs: []upstream.Cost{}}
+				original.Models = []upstream.Model{}
+			}
+			if err := store.SaveDaily(ctx, "docker", "account-a", "http://account-a:4141", "Alice",
+				testDaily(day1Start.Add(12*time.Hour).UnixMilli(), original)); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.SaveDaily(ctx, "docker", "account-a", "http://account-a:4141", "Alice",
+				testDaily(day2Start.Add(time.Hour).UnixMilli(), original,
+					testDay("2026-10-03", day2Start, 10, 1, "model-b"))); err != nil {
+				t.Fatal(err)
+			}
+			corrected := testDay("2026-10-02", day1Start, tc.correctedTokens, tc.cost, "corrected-model")
+			corrected.Totals.Requests = tc.requests
+			corrected.Models[0].Totals = *corrected.Totals
+			latest := testDaily(day2Start.Add(2*time.Hour).UnixMilli(), corrected,
+				testDay("2026-10-03", day2Start, 20, 2, "model-b"))
+			for range 2 {
+				if err := store.SaveDaily(ctx, "docker", "account-a", "http://account-a:4141", "Alice", latest); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := store.SaveDaily(ctx, "docker", "account-a", "http://account-a:4141", "Alice",
+				testDaily(day2Start.Add(90*time.Minute).UnixMilli(), original)); err != nil {
+				t.Fatal(err)
+			}
+			days, found, err := store.LoadDaily(ctx, "account-a", "http://account-a:4141", "Alice", "lifetime", day2Start.Add(3*time.Hour))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !found || len(days) != 2 || days[0].Totals.Tokens != tc.correctedTokens ||
+				days[0].Totals.Requests != tc.requests || days[0].EndMS != day2Start.UnixMilli() || days[1].Totals.Tokens != 20 {
+				t.Fatalf("unexpected corrected days: %+v", days)
+			}
+			if len(days[0].Totals.Costs) != 1 || days[0].Totals.Costs[0].Nanos != tc.cost ||
+				len(days[0].Models) != 1 || days[0].Models[0].Model != "corrected-model" ||
+				days[0].Models[0].Tokens != tc.correctedTokens || days[0].Models[0].Requests != tc.requests ||
+				len(days[0].Models[0].Costs) != 1 || days[0].Models[0].Costs[0].Nanos != tc.cost {
+				t.Fatalf("unexpected corrected details: %+v", days[0])
+			}
+			var segments int
+			if err := store.db.QueryRow(`SELECT COUNT(*) FROM usage_segments`).Scan(&segments); err != nil || segments != 1 {
+				t.Fatalf("usage segments: count=%d err=%v", segments, err)
+			}
+		})
 	}
 }
 
