@@ -250,7 +250,7 @@ func (s *Service) resolveForSync(ctx context.Context) ([]resolved, []discovery.F
 			return nil, nil, value.Err
 		}
 		resolution := value.Val.(syncResolution)
-		return resolution.accounts, append([]discovery.Failure(nil), resolution.failures...), nil
+		return resolution.accounts, append([]discovery.Failure{}, resolution.failures...), nil
 	}
 }
 

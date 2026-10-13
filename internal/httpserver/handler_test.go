@@ -13,6 +13,7 @@ import (
 
 	"github.com/NERVEbing/copilot-api-dashboard/internal/dashboard"
 	"github.com/NERVEbing/copilot-api-dashboard/internal/discovery"
+	sqlitestore "github.com/NERVEbing/copilot-api-dashboard/internal/store/sqlite"
 	"github.com/NERVEbing/copilot-api-dashboard/internal/upstream"
 )
 
@@ -91,6 +92,33 @@ func TestRoutesAndValidation(t *testing.T) {
 	}
 	if got.Data.Period != "last_30_days" || got.Data.Accounts == nil || got.Errors == nil || got.Data.Totals != nil || got.Data.Days != nil || w.Header().Get("Cache-Control") != "no-store" {
 		t.Fatalf("empty response: %s", w.Body.String())
+	}
+}
+
+func TestPersistentSyncReturnsEmptyErrorsArray(t *testing.T) {
+	history, err := sqlitestore.Open(filepath.Join(t.TempDir(), "dashboard.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := history.Close(); err != nil {
+			t.Errorf("close persistence database: %v", err)
+		}
+	})
+	h := New(&dashboard.Service{Discovery: noDiscovery{}, History: history}, "/copilot-dashboard")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/copilot-dashboard/api/v1/sync", nil))
+	var got struct {
+		Data struct {
+			Synced bool `json:"synced"`
+		} `json:"data"`
+		Errors []discovery.Failure `json:"errors"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if w.Code != http.StatusOK || !got.Data.Synced || got.Errors == nil || len(got.Errors) != 0 {
+		t.Fatalf("persistent sync response: %d %s", w.Code, w.Body.String())
 	}
 }
 
