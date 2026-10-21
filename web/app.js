@@ -15,7 +15,7 @@ let eventsController;
 let refreshID = 0;
 let chartDays = null;
 const tableViews = new Map();
-const sorts = { accounts: { column: 2, direction: -1 }, models: { column: 5, direction: -1 }, days: { column: 0, direction: 1 } };
+const sorts = { accounts: { column: 3, direction: -1 }, models: { column: 5, direction: -1 }, days: { column: 0, direction: 1 } };
 
 function money(costs) {
   if (!Array.isArray(costs) || costs.length === 0) return "—";

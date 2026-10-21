@@ -107,7 +107,7 @@ test("numeric sorting uses original values, keeps missing last, and does not mut
   assert.ok(element("models").innerHTML.includes('aria-sort="ascending"'));
 });
 
-test("account quota usage percentage is visual and sorted descending by default", () => {
+test("accounts sort by used values descending by default and display quota usage", () => {
   const { run, element } = app();
   run(`const accounts = [
     {login:'Missing'},
@@ -118,7 +118,7 @@ test("account quota usage percentage is visual and sorted descending by default"
     {login:'RemainingLow',quota_snapshots:{premium_interactions:{unlimited:false,credits_used:299,remaining:1,entitlement:300}}}
   ]; renderAccounts(accounts);`);
   const names = () => [...element("accounts").innerHTML.matchAll(/class="text-cell">([^<]+)/g)].map((match) => match[1]);
-  assert.deepEqual(names(), ["RemainingLow", "PercentHigh", "AbsoluteHigh", "Missing", "Unlimited", "ZeroQuota"]);
+  assert.deepEqual(names(), ["Unlimited", "RemainingLow", "AbsoluteHigh", "PercentHigh", "Missing", "ZeroQuota"]);
   assert.ok(element("accounts").innerHTML.includes(">Usage "));
   assert.ok(element("accounts").innerHTML.includes(">Total "));
   assert.ok(!element("accounts").innerHTML.includes("Premium"));
