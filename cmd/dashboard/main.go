@@ -27,6 +27,10 @@ func run() error {
 		return err
 	}
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: cfg.LogLevel})))
+	aliases, err := config.LoadAccountAliases(cfg.AccountAliasesFile)
+	if err != nil {
+		return err
+	}
 	docker, err := client.New(client.WithHost("unix://" + discovery.SocketPath))
 	if err != nil {
 		return errors.New("cannot initialize Docker client")
@@ -38,7 +42,7 @@ func run() error {
 	}()
 	up := upstream.New(cfg.RequestTimeout, cfg.MaxConcurrency)
 	defer up.Close()
-	service := &dashboard.Service{Discovery: &discovery.Discoverer{File: cfg.EndpointsFile, Image: cfg.DockerImage, Timeout: cfg.RequestTimeout, Docker: docker}, Upstream: up}
+	service := &dashboard.Service{Discovery: &discovery.Discoverer{File: cfg.EndpointsFile, Image: cfg.DockerImage, Timeout: cfg.RequestTimeout, Docker: docker}, Upstream: up, AccountAliases: aliases}
 	var history *sqlitestore.Store
 	if cfg.PersistenceEnabled {
 		history, err = sqlitestore.Open(cfg.DatabasePath)

@@ -9,11 +9,12 @@ function tokens(value) {
   return numeric(value) ? escapeHTML(compact.format(value)) : "—";
 }
 const empty = (message = "—") => `<p class="empty">${escapeHTML(message)}</p>`;
-const state = { account: "", period: "last_30_days", page: 1, totalPages: 1, dashboardErrors: [], eventErrors: [] };
+const state = { account: "", period: "last_30_days", page: 1, totalPages: 1, dashboardErrors: [], eventErrors: [], showAccountNames: false };
 let dashboardController;
 let eventsController;
 let refreshID = 0;
 let chartDays = null;
+let hasAccountAliases = false;
 const tableViews = new Map();
 const sorts = { accounts: { column: 3, direction: -1 }, models: { column: 5, direction: -1 }, days: { column: 0, direction: 1 } };
 
@@ -58,6 +59,16 @@ function sortableTable(id, label, headers, items, getters, renderRow, costs) {
   };
   tableViews.set(id, view);
   return view();
+}
+
+function redrawTable(id) {
+  const container = document.querySelector(`[data-table="${id}"]`), scrollLeft = container.scrollLeft;
+  const focused = document.activeElement, restoreFocus = container.contains(focused);
+  const column = restoreFocus ? focused.closest("button[data-sort]")?.dataset.column : undefined;
+  container.outerHTML = tableViews.get(id)();
+  const replacement = document.querySelector(`[data-table="${id}"]`);
+  replacement.scrollLeft = scrollLeft;
+  if (restoreFocus) (column == null ? replacement : replacement.querySelector(`[data-column="${column}"]`)).focus({ preventScroll: true });
 }
 
 function costValue(costs) {
@@ -252,10 +263,15 @@ function renderModels(models) {
 }
 
 function renderAccounts(accounts) {
+  hasAccountAliases = accounts.some((a) => a.display_name);
   if (!accounts.length) { $("accounts").innerHTML = empty("No accounts available."); return; }
+  const names = accounts.map((a) => a.display_name || a.login), counts = new Map();
+  for (const name of names) counts.set(name, (counts.get(name) ?? 0) + 1);
+  const labels = new Map(accounts.map((a, i) => [a.login, a.display_name && counts.get(names[i]) > 1 ? `${names[i]} (${a.login})` : names[i]]));
+  const accountName = (a) => state.showAccountNames ? labels.get(a.login) : a.login;
   $("accounts").innerHTML = sortableTable("accounts", "Account usage", ["Account", "Plan", "Usage", "Used", "Remaining", "Total", "Tokens", "Requests", "Cost"], accounts,
-    [(a) => a.login, (a) => a.copilot_plan, (a) => usedPercentValue(a.quota_snapshots?.premium_interactions), (a) => usedValue(a.quota_snapshots?.premium_interactions), (a) => validMeteredQuota(a.quota_snapshots?.premium_interactions) ? a.quota_snapshots.premium_interactions.remaining : null, (a) => validMeteredQuota(a.quota_snapshots?.premium_interactions) ? a.quota_snapshots.premium_interactions.entitlement : null, (a) => a.totals?.total_tokens, (a) => a.totals?.request_count, (a) => costValue(a.totals?.costs)],
-    (a) => `<tr><td class="text-cell">${escapeHTML(a.login)}</td><td>${escapeHTML(a.copilot_plan)}</td><td class="number">${quotaUsage(a.quota_snapshots?.premium_interactions)}</td><td class="number">${quotaUsed(a.quota_snapshots?.premium_interactions)}</td><td class="number">${quotaRemaining(a.quota_snapshots?.premium_interactions)}</td><td class="number">${quotaTotal(a.quota_snapshots?.premium_interactions)}</td><td class="number">${tokens(a.totals?.total_tokens)}</td><td class="number">${number(a.totals?.request_count)}</td><td class="number">${money(a.totals?.costs)}</td></tr>`, (a) => a.totals?.costs);
+    [accountName, (a) => a.copilot_plan, (a) => usedPercentValue(a.quota_snapshots?.premium_interactions), (a) => usedValue(a.quota_snapshots?.premium_interactions), (a) => validMeteredQuota(a.quota_snapshots?.premium_interactions) ? a.quota_snapshots.premium_interactions.remaining : null, (a) => validMeteredQuota(a.quota_snapshots?.premium_interactions) ? a.quota_snapshots.premium_interactions.entitlement : null, (a) => a.totals?.total_tokens, (a) => a.totals?.request_count, (a) => costValue(a.totals?.costs)],
+    (a) => `<tr><td class="text-cell">${escapeHTML(accountName(a))}</td><td>${escapeHTML(a.copilot_plan)}</td><td class="number">${quotaUsage(a.quota_snapshots?.premium_interactions)}</td><td class="number">${quotaUsed(a.quota_snapshots?.premium_interactions)}</td><td class="number">${quotaRemaining(a.quota_snapshots?.premium_interactions)}</td><td class="number">${quotaTotal(a.quota_snapshots?.premium_interactions)}</td><td class="number">${tokens(a.totals?.total_tokens)}</td><td class="number">${number(a.totals?.request_count)}</td><td class="number">${money(a.totals?.costs)}</td></tr>`, (a) => a.totals?.costs);
 }
 
 function renderErrors() {
@@ -408,17 +424,22 @@ $("account").addEventListener("change", () => { state.account = $("account").val
 $("period").addEventListener("change", () => { state.period = $("period").value; void refresh(); });
 $("previous").addEventListener("click", () => { if (state.page > 1) { state.page--; void loadEvents(); } });
 $("next").addEventListener("click", () => { if (state.page < state.totalPages) { state.page++; void loadEvents(); } });
+document.addEventListener("keydown", (event) => {
+  if (!["d", "D"].includes(event.key) || event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey || event.repeat || event.isComposing) return;
+  if (event.target?.isContentEditable || event.target?.closest?.("input, textarea, select")) return;
+  if ($("accounts-section").hidden || !hasAccountAliases || !tableViews.has("accounts")) return;
+  event.preventDefault();
+  state.showAccountNames = !state.showAccountNames;
+  redrawTable("accounts");
+  $("announcement").textContent = state.showAccountNames ? "Account display names shown." : "Account logins shown.";
+});
 $("content").addEventListener("click", (event) => {
   const button = event.target.closest("button[data-sort]");
   if (!button || button.disabled) return;
   const id = button.dataset.sort, column = Number(button.dataset.column), sort = sorts[id];
   sort.direction = sort.column === column ? -sort.direction : 1;
   sort.column = column;
-  const container = button.closest(".table-scroll"), scrollLeft = container.scrollLeft;
-  container.outerHTML = tableViews.get(id)();
-  const replacement = document.querySelector(`[data-table="${id}"]`);
-  replacement.scrollLeft = scrollLeft;
-  replacement.querySelector(`[data-column="${column}"]`).focus({ preventScroll: true });
+  redrawTable(id);
 });
 let chartWidth = 0;
 new ResizeObserver(([entry]) => {

@@ -34,6 +34,7 @@ type memoryHistory struct {
 	saveCalls   int
 	loadCalls   int
 	period      string
+	login       string
 }
 
 type synchronizedHistory struct {
@@ -71,9 +72,10 @@ func (h *memoryHistory) SaveDaily(_ context.Context, _, _, _, _ string, daily *u
 	return nil
 }
 
-func (h *memoryHistory) LoadDaily(_ context.Context, _, _, _, period string, _ time.Time) ([]upstream.Day, bool, error) {
+func (h *memoryHistory) LoadDaily(_ context.Context, _, _, login, period string, _ time.Time) ([]upstream.Day, bool, error) {
 	h.loadCalls++
 	h.period = period
+	h.login = login
 	return h.days, h.hasSnapshot, nil
 }
 
@@ -147,6 +149,57 @@ func TestAccountAggregationAndSelection(t *testing.T) {
 	events, status := s.Events(context.Background(), "alice", "today", 2, 1)
 	if status != 200 || events.Data.Page != 2 || events.Data.Items[0].Tokens != 100 || b.count("/token-usage/events") != 0 {
 		t.Fatal("wrong event endpoint")
+	}
+}
+
+func TestAccountAliasesPreserveIdentity(t *testing.T) {
+	for _, mode := range []string{"live", "persistent"} {
+		t.Run(mode, func(t *testing.T) {
+			a := testTarget(t, "SESA836035_seemu", 100, "")
+			b := testTarget(t, "SESA676739_seemu", 200, "")
+			c := testTarget(t, "Unmapped", 300, "")
+			s := serviceFor(t, a, b, c)
+			s.AccountAliases = map[string]string{"sesa836035_seemu": "张三", "sesa676739_seemu": "张三"}
+			history := &memoryHistory{hasSnapshot: true, days: []upstream.Day{{Date: "2026-09-08", Totals: &upstream.Totals{Tokens: 100}}}}
+			if mode == "persistent" {
+				s.History = history
+			}
+			all, found := s.Dashboard(context.Background(), "lifetime", "")
+			if !found || len(all.Errors) != 0 || len(all.Data.Accounts) != 3 {
+				t.Fatalf("accounts: %+v", all)
+			}
+			for _, account := range all.Data.Accounts {
+				want := "张三"
+				if account.Login == "Unmapped" {
+					want = ""
+				}
+				if account.DisplayName != want {
+					t.Fatalf("account alias: %+v", account)
+				}
+			}
+			one, found := s.Dashboard(context.Background(), "lifetime", "sesa836035_seemu")
+			if !found || len(one.Errors) != 0 || one.Data.SelectedAccount == nil || *one.Data.SelectedAccount != "SESA836035_seemu" || one.Data.Totals.Tokens != 100 {
+				t.Fatalf("selected account: %+v", one)
+			}
+			if mode == "persistent" && history.login != "SESA836035_seemu" {
+				t.Fatalf("history login: %s", history.login)
+			}
+			encoded, err := json.Marshal(all.Data.Accounts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var accounts []map[string]any
+			if err := json.Unmarshal(encoded, &accounts); err != nil {
+				t.Fatal(err)
+			}
+			for _, account := range accounts {
+				if account["login"] == "Unmapped" {
+					if _, exists := account["display_name"]; exists {
+						t.Fatal("unmapped account has a display_name field")
+					}
+				}
+			}
+		})
 	}
 }
 

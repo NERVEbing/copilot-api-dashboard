@@ -15,6 +15,7 @@ services:
       COPILOT_API_DASHBOARD_LISTEN_ADDR: ":9000"
       COPILOT_API_DASHBOARD_BASE_PATH: "/"
       COPILOT_API_DASHBOARD_ENDPOINTS_FILE: /config/endpoints.yaml
+      # COPILOT_API_DASHBOARD_ACCOUNT_ALIASES_FILE: /config/account-aliases.yaml
       COPILOT_API_DASHBOARD_DOCKER_IMAGE: ghcr.io/caozhiyuan/copilot-api:latest
       COPILOT_API_DASHBOARD_REQUEST_TIMEOUT: 5s
       COPILOT_API_DASHBOARD_MAX_CONCURRENCY: "32"
@@ -35,4 +36,5 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       # - ./config/endpoints.yaml:/config/endpoints.yaml:ro
+      # - ./config/account-aliases.yaml:/config/account-aliases.yaml:ro
       # - ./data:/data

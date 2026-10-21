@@ -11,7 +11,13 @@ function app(baseURI = "http://localhost/", fetchImpl = () => new Promise(() => 
     return Object.assign({
       hidden: true, style: {}, offsetWidth: 190, offsetHeight: 100,
       addEventListener(type, listener) { listeners.set(type, listener); },
-      dispatch(type, event = {}) { listeners.get(type)?.({ preventDefault() {}, pointerType: "mouse", clientX: 0, ...event }); },
+      dispatch(type, event = {}) {
+        const dispatched = { preventDefault() { this.defaultPrevented = true; }, pointerType: "mouse", clientX: 0, ...event };
+        listeners.get(type)?.(dispatched);
+        return dispatched;
+      },
+      closest(selector) { return selector === "button[data-sort]" && this.dataset?.sort ? this : null; },
+      focus() { document.activeElement = this; },
       setAttribute(name, value) { attributes.set(name, String(value)); },
       getAttribute(name) { return attributes.get(name); },
       get innerHTML() { return innerHTML; },
@@ -29,22 +35,37 @@ function app(baseURI = "http://localhost/", fetchImpl = () => new Promise(() => 
     focus() { this.dispatch("focus"); },
   });
   const element = (id) => {
-    if (!elements.has(id)) elements.set(id, {
+    if (!elements.has(id)) elements.set(id, node({
       innerHTML: "", textContent: "", hidden: false, clientWidth: 800,
       classList: { toggle() {} }, querySelector(selector) { return id === "trend" && selector === ".chart-plot" && this.innerHTML.includes('class="chart-plot"') ? plot : null; },
-      setAttribute() {}, addEventListener() {}, replaceChildren() {},
-    });
+      replaceChildren(...options) { this.options = options; },
+    }));
     return elements.get(id);
   };
+  const accountSortButtons = Array.from({ length: 9 }, (_, column) => node({ dataset: { sort: "accounts", column: String(column) } }));
+  const accountTable = node({
+    scrollLeft: 0,
+    contains(target) { return target === this || accountSortButtons.includes(target); },
+    querySelector(selector) { return accountSortButtons[Number(selector.match(/data-column="(\d+)"/)?.[1])]; },
+  });
+  Object.defineProperty(accountTable, "outerHTML", { set(value) {
+    element("accounts").innerHTML = value;
+    if (accountTable.contains(document.activeElement)) document.activeElement = null;
+    accountTable.scrollLeft = 0;
+  } });
+  const document = node({
+    baseURI, getElementById: element, activeElement: null,
+    querySelector(selector) { return selector === '[data-table="accounts"]' ? accountTable : null; },
+  });
   const context = vm.createContext({
-    document: { baseURI, getElementById: element },
+    document,
     ResizeObserver: class { observe() {} },
     Option: class { constructor(text, value) { this.text = text; this.value = value; } },
     AbortController, URL, URLSearchParams, Intl,
     fetch: fetchImpl,
   });
   vm.runInContext(readFileSync(`${__dirname}/app.js`, "utf8"), context);
-  return { run: (code) => vm.runInContext(code, context), element, chart: { plot, svg, hitArea, guide, active, tooltip } };
+  return { run: (code) => vm.runInContext(code, context), element, document, accountTable, chart: { plot, svg, hitArea, guide, active, tooltip } };
 }
 
 test("API URLs follow the document base path", () => {
@@ -128,6 +149,110 @@ test("accounts sort by used values descending by default and display quota usage
   assert.ok(run("quotaUsage({unlimited:false,entitlement:100,remaining:0,percent_remaining:-4.2})").includes('class="quota-usage exhausted"><progress value="100" max="100" aria-label="104.2% used"></progress><span class="quota-usage-value">104.2%</span>'));
   assert.equal(run("usedPercentValue({unlimited:false,entitlement:0,remaining:0,percent_remaining:0})"), null);
   assert.equal(run("quotaUsage({unlimited:false,entitlement:0,remaining:0,percent_remaining:0})"), "—");
+});
+
+test("d toggles only account table names and preserves sorting, focus, scroll, and requests", () => {
+  const calls = [];
+  const { run, element, document, accountTable } = app("http://localhost/", (...args) => { calls.push(args); return new Promise(() => {}); });
+  run(`renderDashboard({accounts:[
+    {login:'account-a',display_name:'Zulu'}, {login:'account-b',display_name:'Alpha'}, {login:'unmapped'}
+  ]}); sorts.accounts = {column:0,direction:1}; redrawTable('accounts'); state.page = 2;`);
+  const names = () => [...element("accounts").innerHTML.matchAll(/class="text-cell">([^<]+)/g)].map((match) => match[1]);
+  assert.deepEqual(names(), ["account-a", "account-b", "unmapped"]);
+  const originalOptions = element("account").options;
+  const otherViews = ["identity", "metrics", "trend", "models", "events"].map((id) => element(id).innerHTML);
+  accountTable.scrollLeft = 120;
+  const focused = accountTable.querySelector('[data-column="0"]');
+  focused.focus();
+  const requestCount = calls.length;
+  assert.equal(document.dispatch("keydown", { key: "d" }).defaultPrevented, true);
+  assert.deepEqual(names(), ["Alpha", "unmapped", "Zulu"]);
+  assert.equal(document.activeElement, focused);
+  assert.equal(accountTable.scrollLeft, 120);
+  assert.equal(run("sorts.accounts.column"), 0);
+  assert.equal(run("sorts.accounts.direction"), 1);
+  assert.equal(run("state.page"), 2);
+  assert.equal(run("state.account"), "");
+  assert.equal(calls.length, requestCount);
+  assert.equal(element("account").options, originalOptions);
+  assert.deepEqual(["identity", "metrics", "trend", "models", "events"].map((id) => element(id).innerHTML), otherViews);
+  document.dispatch("keydown", { key: "d" });
+  assert.deepEqual(names(), ["account-a", "account-b", "unmapped"]);
+});
+
+test("display mode survives refresh and account changes while queries and details retain logins", async () => {
+  const calls = [];
+  const dashboard = { accounts: [{ login: "account-a", display_name: "Alice" }] };
+  const fetch = async (url, options) => {
+    calls.push({ method: options.method, path: url.pathname, account: url.searchParams.get("account") });
+    const data = url.pathname.endsWith("/dashboard") ? dashboard : url.pathname.endsWith("/events") ? { page: 1, total_pages: 1, total: 0, items: [] } : { synced: true };
+    return { ok: true, status: 200, json: async () => ({ data, errors: [] }) };
+  };
+  const { run, element, document } = app("http://localhost/", fetch);
+  await new Promise((resolve) => setImmediate(resolve));
+  document.dispatch("keydown", { key: "d" });
+  await run("refresh(true)");
+  assert.ok(element("accounts").innerHTML.includes('class="text-cell">Alice'));
+  element("account").value = "account-a";
+  element("account").dispatch("change");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(element("accounts-section").hidden, true);
+  assert.ok(element("identity").innerHTML.includes("<h2>account-a</h2>"));
+  assert.deepEqual(element("account").options.map((option) => [option.text, option.value]), [["All accounts", ""], ["account-a", "account-a"]]);
+  assert.deepEqual(calls.slice(-2), [
+    { method: "GET", path: "/api/v1/dashboard", account: "account-a" },
+    { method: "GET", path: "/api/v1/events", account: "account-a" },
+  ]);
+  document.dispatch("keydown", { key: "d" });
+  assert.equal(run("state.showAccountNames"), true);
+  element("account").value = "";
+  element("account").dispatch("change");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(element("accounts").innerHTML.includes('class="text-cell">Alice'));
+  const reloaded = app("http://localhost/", fetch);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(reloaded.element("accounts").innerHTML.includes('class="text-cell">account-a'));
+});
+
+test("account shortcut ignores editing, modifiers, composition, repeats, unavailable mappings, and loading", () => {
+  const { run, element, document } = app();
+  run("renderAccounts([{login:'account-a',display_name:'Alice'}])");
+  for (const event of [
+    { key: "x" }, { ctrlKey: true }, { metaKey: true }, { altKey: true },
+    { repeat: true }, { isComposing: true }, { defaultPrevented: true },
+    { target: { isContentEditable: true } },
+    ...["input", "textarea", "select"].map((tag) => ({ target: { closest(selector) { return selector.split(", ").includes(tag) ? this : null; } } })),
+  ]) {
+    const before = element("accounts").innerHTML;
+    document.dispatch("keydown", { key: "d", ...event });
+    assert.equal(element("accounts").innerHTML, before);
+    assert.equal(run("state.showAccountNames"), false);
+  }
+  element("accounts-section").hidden = true;
+  document.dispatch("keydown", { key: "d" });
+  assert.equal(run("state.showAccountNames"), false);
+  element("accounts-section").hidden = false;
+  run("renderAccounts([{login:'unmapped'}])");
+  document.dispatch("keydown", { key: "d" });
+  assert.equal(run("state.showAccountNames"), false);
+  run("renderAccounts([{login:'account-a',display_name:'Alice'}]); tableViews.clear()");
+  document.dispatch("keydown", { key: "d" });
+  assert.equal(run("state.showAccountNames"), false);
+});
+
+test("display names disambiguate duplicate labels and escape HTML", () => {
+  const { run, element, document } = app();
+  run(`renderAccounts([
+    {login:'account-a',display_name:'Alice'}, {login:'account-b',display_name:'Alice'},
+    {login:'Alice'}, {login:'account-c',display_name:'<img src=x onerror=alert(1)>'}
+  ])`);
+  document.dispatch("keydown", { key: "D" });
+  const html = element("accounts").innerHTML;
+  assert.ok(html.includes('class="text-cell">Alice (account-a)'));
+  assert.ok(html.includes('class="text-cell">Alice (account-b)'));
+  assert.ok(html.includes('class="text-cell">Alice</td>'));
+  assert.ok(html.includes("&lt;img src=x onerror=alert(1)&gt;"));
+  assert.ok(!html.includes("<img"));
 });
 
 test("account quota cards treat zero entitlement as unavailable", () => {

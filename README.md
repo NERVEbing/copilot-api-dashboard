@@ -16,6 +16,7 @@ A read-only usage dashboard for multiple [Copilot API](https://github.com/caozhi
 
 - Multi-account quotas, usage, costs, models, and request events
 - Docker discovery and YAML endpoints
+- Optional account display names in the Accounts table, toggled with `d`
 - Optional SQLite daily usage history
 
 ## Quick start
@@ -33,19 +34,20 @@ By default, the dashboard discovers `ghcr.io/caozhiyuan/copilot-api:latest` cont
 
 ## Configuration
 
-| Environment variable                        | Default                                                                |
-| ------------------------------------------- | ---------------------------------------------------------------------- |
-| `TZ`                                        | `UTC`                                                                  |
-| `COPILOT_API_DASHBOARD_LISTEN_ADDR`         | `:9000`                                                                |
-| `COPILOT_API_DASHBOARD_BASE_PATH`           | `/`                                                                    |
-| `COPILOT_API_DASHBOARD_ENDPOINTS_FILE`      | `config/endpoints.yaml` if present, otherwise `/config/endpoints.yaml` |
-| `COPILOT_API_DASHBOARD_DOCKER_IMAGE`        | `ghcr.io/caozhiyuan/copilot-api:latest`                                |
-| `COPILOT_API_DASHBOARD_REQUEST_TIMEOUT`     | `5s`                                                                   |
-| `COPILOT_API_DASHBOARD_MAX_CONCURRENCY`     | `32`                                                                   |
-| `COPILOT_API_DASHBOARD_LOG_LEVEL`           | `info`                                                                 |
-| `COPILOT_API_DASHBOARD_PERSISTENCE_ENABLED` | `false`                                                                |
-| `COPILOT_API_DASHBOARD_DATABASE_PATH`       | `/data/dashboard.sqlite`                                               |
-| `COPILOT_API_DASHBOARD_SYNC_INTERVAL`       | `10m`                                                                  |
+| Environment variable                         | Default                                                                |
+| -------------------------------------------- | ---------------------------------------------------------------------- |
+| `TZ`                                         | `UTC`                                                                  |
+| `COPILOT_API_DASHBOARD_LISTEN_ADDR`          | `:9000`                                                                |
+| `COPILOT_API_DASHBOARD_BASE_PATH`            | `/`                                                                    |
+| `COPILOT_API_DASHBOARD_ENDPOINTS_FILE`       | `config/endpoints.yaml` if present, otherwise `/config/endpoints.yaml` |
+| `COPILOT_API_DASHBOARD_ACCOUNT_ALIASES_FILE` | Empty (disabled)                                                       |
+| `COPILOT_API_DASHBOARD_DOCKER_IMAGE`         | `ghcr.io/caozhiyuan/copilot-api:latest`                                |
+| `COPILOT_API_DASHBOARD_REQUEST_TIMEOUT`      | `5s`                                                                   |
+| `COPILOT_API_DASHBOARD_MAX_CONCURRENCY`      | `32`                                                                   |
+| `COPILOT_API_DASHBOARD_LOG_LEVEL`            | `info`                                                                 |
+| `COPILOT_API_DASHBOARD_PERSISTENCE_ENABLED`  | `false`                                                                |
+| `COPILOT_API_DASHBOARD_DATABASE_PATH`        | `/data/dashboard.sqlite`                                               |
+| `COPILOT_API_DASHBOARD_SYNC_INTERVAL`        | `10m`                                                                  |
 
 Use the same `TZ` as the Copilot API containers.
 
@@ -63,6 +65,26 @@ endpoints:
 ```
 
 Use either `api_key_env` or `api_key`, not both. For Compose, uncomment the endpoint file mount and pass variables referenced by `api_key_env`. Local `config/endpoints.yaml` is ignored by Git.
+
+### Account display names
+
+```sh
+cp config/account-aliases.example.yaml config/account-aliases.yaml
+```
+
+Edit the file to map complete account logins to display names:
+
+```yaml
+aliases:
+  account-a: Alice
+  account-b: Bob
+```
+
+Set `COPILOT_API_DASHBOARD_ACCOUNT_ALIASES_FILE` to the file path. For Compose, uncomment both the variable and the read-only file mount. The file is loaded at startup; restart the dashboard after editing it. An unreadable or invalid file prevents startup. Logins match case-insensitively; duplicate logins and empty or non-string display names are invalid. Local `config/account-aliases.yaml` is ignored by Git.
+
+Press `d` to toggle display names in the Accounts table. Unmapped accounts keep their logins; mapped names that duplicate another account's label include the original login. Sorting uses the displayed names. Account selection, detail headings, API queries, and history continue to use original logins.
+
+The shortcut works when the Accounts table is visible and at least one account has a display name. It ignores input fields, selects, editable content, Ctrl/Command/Alt combinations, repeated keydown events, and input method composition. The display mode survives Refresh and filter changes within the page, and resets to original logins on a full page reload. Display names and the selected display mode are not stored in SQLite or browser storage.
 
 ### SQLite history
 

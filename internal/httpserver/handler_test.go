@@ -151,7 +151,7 @@ func TestHTTPVerticalSlice(t *testing.T) {
 	d := &discovery.Discoverer{File: file, Timeout: time.Second, SocketExists: func() (bool, error) { return false, nil }, LookupEnv: func(key string) (string, bool) { return "private-test-key", key == "TEST_KEY" }}
 	c := upstream.New(time.Second, 2)
 	defer c.Close()
-	srv := httptest.NewServer(New(&dashboard.Service{Discovery: d, Upstream: c}, "/"))
+	srv := httptest.NewServer(New(&dashboard.Service{Discovery: d, Upstream: c, AccountAliases: map[string]string{"account-a": "Display Account"}}, "/"))
 	defer srv.Close()
 	res, err := http.Get(srv.URL + "/api/v1/dashboard")
 	if err != nil {
@@ -168,6 +168,9 @@ func TestHTTPVerticalSlice(t *testing.T) {
 	}
 	if res.StatusCode != 200 || out.Data.Totals.Tokens != 180 || len(out.Errors) != 1 || out.Errors[0].Target != "failed" || out.Errors[0].Message != "upstream returned HTTP 503" {
 		t.Fatalf("dashboard: %+v", out)
+	}
+	if len(out.Data.Accounts) != 1 || out.Data.Accounts[0].Login != "Account-A" || out.Data.Accounts[0].DisplayName != "Display Account" {
+		t.Fatalf("account identity and display name: %+v", out.Data.Accounts)
 	}
 	encoded, _ := json.Marshal(out)
 	if strings.Contains(string(encoded), "private-test-key") {

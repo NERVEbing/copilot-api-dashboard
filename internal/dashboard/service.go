@@ -20,17 +20,18 @@ type Discovery interface {
 }
 
 type Service struct {
-	Discovery   Discovery
-	Upstream    *upstream.Client
-	History     History
-	Now         func() time.Time
-	SyncContext context.Context
-	resolveSync singleflight.Group
-	accountSync singleflight.Group
-	syncTaskMu  sync.Mutex
-	syncTasks   int
-	syncStopped bool
-	syncDone    chan struct{}
+	Discovery      Discovery
+	Upstream       *upstream.Client
+	History        History
+	AccountAliases map[string]string
+	Now            func() time.Time
+	SyncContext    context.Context
+	resolveSync    singleflight.Group
+	accountSync    singleflight.Group
+	syncTaskMu     sync.Mutex
+	syncTasks      int
+	syncStopped    bool
+	syncDone       chan struct{}
 }
 
 type History interface {
@@ -40,7 +41,8 @@ type History interface {
 
 type Account struct {
 	upstream.Usage
-	Totals *upstream.Totals `json:"totals"`
+	DisplayName string           `json:"display_name,omitempty"`
+	Totals      *upstream.Totals `json:"totals"`
 }
 
 type Day struct {
@@ -137,7 +139,7 @@ func (s *Service) Dashboard(ctx context.Context, period, login string) (Response
 	results := make([]fetched, len(accounts))
 	var wg sync.WaitGroup
 	for i, a := range accounts {
-		out.Data.Accounts = append(out.Data.Accounts, Account{Usage: *a.usage})
+		out.Data.Accounts = append(out.Data.Accounts, Account{Usage: *a.usage, DisplayName: s.AccountAliases[strings.ToLower(a.usage.Login)]})
 		if login != "" && !strings.EqualFold(login, a.usage.Login) {
 			continue
 		}
@@ -320,7 +322,7 @@ func (s *Service) persistedDashboard(ctx context.Context, accounts []resolved, f
 		out.Data.SelectedAccount = &login
 	}
 	for i, account := range accounts {
-		out.Data.Accounts = append(out.Data.Accounts, Account{Usage: *account.usage})
+		out.Data.Accounts = append(out.Data.Accounts, Account{Usage: *account.usage, DisplayName: s.AccountAliases[strings.ToLower(account.usage.Login)]})
 		if login != "" && !strings.EqualFold(login, account.usage.Login) {
 			continue
 		}
