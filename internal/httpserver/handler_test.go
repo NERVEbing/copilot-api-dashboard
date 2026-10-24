@@ -192,6 +192,9 @@ func TestHTTPVerticalSlice(t *testing.T) {
 	if res2.StatusCode != 200 || events.Data.Page != 2 || events.Data.PageSize != 1 || events.Data.Items[0].Cost.Nanos != 123 || len(events.Errors) != 1 {
 		t.Fatalf("events: %+v", events)
 	}
+	if event := events.Data.Items[0]; event.DurationMS == nil || *event.DurationMS != 1234.5 || event.Outcome == nil || *event.Outcome != "completed" {
+		t.Fatalf("event timing did not reach the HTTP response: %+v", event)
+	}
 }
 
 func TestBasePathRoutes(t *testing.T) {

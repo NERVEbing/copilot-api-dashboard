@@ -1,7 +1,8 @@
 # Upstream contract fixtures
 
-Synthetic, credential-free examples based on caozhiyuan/copilot-api commit
-`0e419052cdce5f949fc656d715a9ccc3d2abb743`, inspected on 2026-09-08:
+Synthetic, credential-free examples based on caozhiyuan/copilot-api release
+`v2.7.38`, commit `1236d73c1e1692d659e590bd99190a8c1d697c38`, inspected on
+2026-10-24:
 
 - `src/services/github/get-copilot-usage.ts`
 - `src/routes/token-usage/route.ts`
@@ -10,5 +11,9 @@ Synthetic, credential-free examples based on caozhiyuan/copilot-api commit
 These fixtures verify decoding and field mapping. They are not captured live
 responses and do not establish deployment acceptance. The examples use the
 native `byModel`, `request_count`, nullable AIU, integer cost nanos, and pagination
-fields. Unknown upstream fields are ignored; missing account identity or required
-dataset structure is rejected.
+fields. Model entries include nullable average TTFT and output speed. Event
+entries include request ID, TTFT, duration, outcome, output speed, and User-Agent.
+The Dashboard currently decodes duration and outcome for display; the other new
+fields are ignored. Missing or null timing remains unavailable, rather than zero.
+Unknown upstream fields are ignored; missing account identity or required dataset
+structure is rejected.

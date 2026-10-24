@@ -16,7 +16,33 @@ let refreshID = 0;
 let chartDays = null;
 let hasAccountAliases = false;
 const tableViews = new Map();
-const sorts = { accounts: { column: 3, direction: -1 }, models: { column: 5, direction: -1 }, days: { column: 0, direction: 1 } };
+const sorts = { accounts: { column: 3, direction: -1 }, models: { column: 6, direction: -1 }, days: { column: 0, direction: 1 } };
+
+function cacheHitRate(usage) {
+  const counts = [usage?.input_tokens, usage?.cache_read_input_tokens, usage?.cache_creation_input_tokens];
+  if (counts.some((value) => !numeric(value) || value < 0)) return null;
+  const total = counts.reduce((sum, value) => sum + value, 0);
+  return numeric(total) && total > 0 ? usage.cache_read_input_tokens / total * 100 : null;
+}
+
+function cacheHitRateText(usage) {
+  const rate = cacheHitRate(usage);
+  return rate === null ? "—" : `${percent(rate)}%`;
+}
+
+function duration(value) {
+  if (!numeric(value) || value < 0) return "—";
+  return value < 1000 ? `${value.toFixed(0)} ms` : `${(value / 1000).toFixed(2)} s`;
+}
+
+function requestOutcome(value) {
+  switch (value) {
+    case "completed": return "Completed";
+    case "cancelled": return "Cancelled";
+    case "error": return "Error";
+    default: return "—";
+  }
+}
 
 function money(costs) {
   if (!Array.isArray(costs) || costs.length === 0) return "—";
@@ -37,7 +63,7 @@ function headerCell(label, index, sortID, disabledCost, className = "", attribut
 }
 
 function table(label, headers, rows, sortID, disabledCost = false) {
-  const cells = headers.map((header, index) => headerCell(header, index, sortID, disabledCost, index && !["Model", "Plan", "Endpoint", "Target", "Operation", "Error"].includes(header) ? "number" : "")).join("");
+  const cells = headers.map((header, index) => headerCell(header, index, sortID, disabledCost, index && !["Model", "Plan", "Endpoint", "Outcome", "Target", "Operation", "Error"].includes(header) ? "number" : "", header === "Outcome" ? ' title="HTTP/body completion. Completed does not certify model success."' : "")).join("");
   return `<div class="table-scroll"${sortID ? ` data-table="${sortID}"` : ""} tabindex="0" role="region" aria-label="${escapeHTML(label)}"><table><caption class="sr-only">${escapeHTML(label)}</caption><thead><tr>${cells}</tr></thead><tbody>${rows.join("")}</tbody></table></div>`;
 }
 
@@ -134,6 +160,7 @@ function renderMetrics(totals) {
   $("metrics").classList.toggle("single", Boolean(state.account));
   const values = [metric("Total tokens", tokens(totals?.total_tokens)), metric("Requests", number(totals?.request_count)), metric("Cost", money(totals?.costs))];
   if (state.account) values.push(metric("Input tokens", tokens(totals?.input_tokens)), metric("Output tokens", tokens(totals?.output_tokens)), metric("Cache read", tokens(totals?.cache_read_input_tokens)), metric("Cache creation", tokens(totals?.cache_creation_input_tokens)));
+  values.push(metric("Cache hit rate", cacheHitRateText(totals)));
   $("metrics").innerHTML = values.join("");
 }
 
@@ -257,9 +284,9 @@ function renderTrend(days) {
 function renderModels(models) {
   if (!Array.isArray(models)) { $("models").innerHTML = empty(); return; }
   if (!models.length) { $("models").innerHTML = empty("No model usage for this period."); return; }
-  $("models").innerHTML = sortableTable("models", "Model breakdown", ["Model", "Input", "Output", "Cache read", "Cache creation", "Tokens", "Requests", "Cost"], models,
-    [(m) => m.model, ...["input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens", "total_tokens", "request_count"].map((key) => (m) => m[key]), (m) => costValue(m.costs)],
-    (m) => `<tr><td class="text-cell">${escapeHTML(m.model)}</td>${[m.input_tokens, m.output_tokens, m.cache_read_input_tokens, m.cache_creation_input_tokens, m.total_tokens].map((v) => `<td class="number">${tokens(v)}</td>`).join("")}<td class="number">${number(m.request_count)}</td><td class="number">${money(m.costs)}</td></tr>`, (m) => m.costs);
+  $("models").innerHTML = sortableTable("models", "Model breakdown", ["Model", "Input", "Output", "Cache read", "Cache creation", "Cache hit rate", "Tokens", "Requests", "Cost"], models,
+    [(m) => m.model, ...["input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"].map((key) => (m) => m[key]), cacheHitRate, (m) => m.total_tokens, (m) => m.request_count, (m) => costValue(m.costs)],
+    (m) => `<tr><td class="text-cell">${escapeHTML(m.model)}</td>${[m.input_tokens, m.output_tokens, m.cache_read_input_tokens, m.cache_creation_input_tokens].map((v) => `<td class="number">${tokens(v)}</td>`).join("")}<td class="number">${cacheHitRateText(m)}</td><td class="number">${tokens(m.total_tokens)}</td><td class="number">${number(m.request_count)}</td><td class="number">${money(m.costs)}</td></tr>`, (m) => m.costs);
 }
 
 function renderAccounts(accounts) {
@@ -321,10 +348,10 @@ function renderEvents(data) {
   $("page-label").textContent = `Page ${number(data.page)} of ${number(data.total_pages)}`;
   $("previous").disabled = data.page <= 1;
   $("next").disabled = data.page >= data.total_pages;
-  $("events").innerHTML = data.items.length ? table("Request events", ["Time", "Model", "Endpoint", "Input", "Output", "Cache read", "Cache creation", "Tokens", "Cost"], data.items.map((e) => {
+  $("events").innerHTML = data.items.length ? table("Request events", ["Time", "Model", "Endpoint", "Input", "Output", "Cache read", "Cache creation", "Duration", "Tokens", "Cost", "Outcome"], data.items.map((e) => {
     const date = new Date(e.created_at_ms);
     const time = Number.isNaN(date.getTime()) ? "—" : date.toLocaleString("en-US");
-    return `<tr><td title="${escapeHTML(e.created_at_utc)}">${escapeHTML(time)}</td><td class="text-cell">${escapeHTML(e.model)}</td><td>${escapeHTML(e.endpoint)}</td>${[e.input_tokens, e.output_tokens, e.cache_read_input_tokens, e.cache_creation_input_tokens, e.total_tokens].map((v) => `<td class="number">${tokens(v)}</td>`).join("")}<td class="number">${money(e.cost ? [e.cost] : null)}</td></tr>`;
+    return `<tr><td title="${escapeHTML(e.created_at_utc)}">${escapeHTML(time)}</td><td class="text-cell">${escapeHTML(e.model)}</td><td>${escapeHTML(e.endpoint)}</td>${[e.input_tokens, e.output_tokens, e.cache_read_input_tokens, e.cache_creation_input_tokens].map((v) => `<td class="number">${tokens(v)}</td>`).join("")}<td class="number">${duration(e.duration_ms)}</td><td class="number">${tokens(e.total_tokens)}</td><td class="number">${money(e.cost ? [e.cost] : null)}</td><td>${requestOutcome(e.request_outcome)}</td></tr>`;
   })) : empty("No request events for this period.");
 }
 

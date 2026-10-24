@@ -15,6 +15,7 @@ A read-only usage dashboard for multiple [Copilot API](https://github.com/caozhi
 ## Features
 
 - Multi-account quotas, usage, costs, models, and request events
+- Cache hit rate, request duration, and HTTP/body completion outcomes
 - Docker discovery and YAML endpoints
 - Optional account display names in the Accounts table, toggled with `d`
 - Optional SQLite daily usage history
@@ -66,6 +67,8 @@ endpoints:
 
 Use either `api_key_env` or `api_key`, not both. For Compose, uncomment the endpoint file mount and pass variables referenced by `api_key_env`. Local `config/endpoints.yaml` is ignored by Git.
 
+For authenticated containers, configure a YAML endpoint with the same URL as Docker discovery and a regular API key from the upstream `config.json` `auth.apiKeys` list. YAML takes precedence for the same normalized URL. Docker discovery does not read the upstream configuration file.
+
 ### Account display names
 
 ```sh
@@ -85,6 +88,12 @@ Set `COPILOT_API_DASHBOARD_ACCOUNT_ALIASES_FILE` to the file path. For Compose, 
 Press `d` to toggle display names in the Accounts table. Unmapped accounts keep their logins; mapped names that duplicate another account's label include the original login. Sorting uses the displayed names. Account selection, detail headings, API queries, and history continue to use original logins.
 
 The shortcut works when the Accounts table is visible and at least one account has a display name. It ignores input fields, selects, editable content, Ctrl/Command/Alt combinations, repeated keydown events, and input method composition. The display mode survives Refresh and filter changes within the page, and resets to original logins on a full page reload. Display names and the selected display mode are not stored in SQLite or browser storage.
+
+### Usage metrics
+
+Cache hit rate is cache-read tokens divided by the sum of input, cache-read, and cache-creation tokens. It appears in the summary and Model breakdown. All-account values use the combined token counts. Missing counters or a zero denominator display `—`; a positive denominator with no cache reads displays `0%`.
+
+Request events show duration and outcome from the live upstream response. Duration is displayed in milliseconds below one second, or seconds otherwise. Missing measurements display `—`. Outcome describes HTTP/body completion: `Completed`, `Cancelled`, or `Error`. `Completed` does not certify model success; an SSE protocol error can still end with a completed response body.
 
 ### SQLite history
 

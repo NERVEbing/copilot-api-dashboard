@@ -64,6 +64,41 @@ func TestContractFixtures(t *testing.T) {
 	if err != nil || p.Page != 2 || p.Items[0].Cost.Nanos != 123 || p.Items[0].UserID != "Account-A" {
 		t.Fatalf("events: %+v %v", p, err)
 	}
+	if event := p.Items[0]; event.DurationMS == nil || *event.DurationMS != 1234.5 || event.Outcome == nil || *event.Outcome != "completed" {
+		t.Fatalf("event timing: %+v", event)
+	}
+}
+
+func TestOptionalEventTiming(t *testing.T) {
+	for _, tc := range []struct {
+		name, fields string
+		zeroDuration bool
+	}{
+		{name: "missing"},
+		{name: "null", fields: `,"duration_ms":null,"request_outcome":null`},
+		{name: "zero", fields: `,"duration_ms":0,"request_outcome":"cancelled"`, zeroDuration: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_, _ = w.Write([]byte(`{"items":[{"id":1` + tc.fields + `}],"period":"today","page":1,"page_size":20,"total":1,"total_pages":1}`))
+			}))
+			defer srv.Close()
+			c := New(time.Second, 1)
+			defer c.Close()
+			events, err := c.Events(context.Background(), discovery.Endpoint{URL: srv.URL}, "today", 1, 20)
+			if err != nil || len(events.Items) != 1 {
+				t.Fatalf("events: %+v %v", events, err)
+			}
+			event := events.Items[0]
+			if tc.zeroDuration {
+				if event.DurationMS == nil || *event.DurationMS != 0 || event.Outcome == nil || *event.Outcome != "cancelled" {
+					t.Fatalf("zero timing lost: %+v", event)
+				}
+			} else if event.DurationMS != nil || event.Outcome != nil {
+				t.Fatalf("unavailable timing became a value: %+v", event)
+			}
+		})
+	}
 }
 
 func TestRequestFailures(t *testing.T) {

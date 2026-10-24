@@ -90,6 +90,8 @@ type Event struct {
 	Source        string     `json:"source"`
 	TraceID       string     `json:"trace_id"`
 	UserID        string     `json:"user_id"`
+	DurationMS    *float64   `json:"duration_ms"`
+	Outcome       *string    `json:"request_outcome"`
 	Input         int64      `json:"input_tokens"`
 	Output        int64      `json:"output_tokens"`
 	CacheRead     int64      `json:"cache_read_input_tokens"`

@@ -114,6 +114,85 @@ test("money formats amounts and distinguishes subcent from zero", () => {
   assert.ok(run("money([{currency:'<img>',total_cost_nanos:1}])").includes("&lt;img&gt;"));
 });
 
+test("cache hit rate includes cache creation and distinguishes missing from zero", () => {
+  const { run } = app();
+  for (const [usage, expected] of [
+    [{ input_tokens: 100, cache_read_input_tokens: 20, cache_creation_input_tokens: 10 }, "15.4%"],
+    [{ input_tokens: 0, cache_read_input_tokens: 5, cache_creation_input_tokens: 0 }, "100%"],
+    [{ input_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }, "0%"],
+    [{ input_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }, "—"],
+    [null, "—"], [{}, "—"],
+    [{ input_tokens: 10, cache_read_input_tokens: 2 }, "—"],
+    [{ input_tokens: null, cache_read_input_tokens: 2, cache_creation_input_tokens: 0 }, "—"],
+    [{ input_tokens: -1, cache_read_input_tokens: 2, cache_creation_input_tokens: 0 }, "—"],
+    [{ input_tokens: 10, cache_read_input_tokens: "2", cache_creation_input_tokens: 0 }, "—"],
+  ]) assert.equal(run(`cacheHitRateText(${JSON.stringify(usage)})`), expected);
+  assert.equal(run("cacheHitRateText({input_tokens:Infinity,cache_read_input_tokens:2,cache_creation_input_tokens:0})"), "—");
+  assert.equal(run("cacheHitRateText({input_tokens:NaN,cache_read_input_tokens:2,cache_creation_input_tokens:0})"), "—");
+  assert.equal(run("cacheHitRateText({input_tokens:Number.MAX_VALUE,cache_read_input_tokens:Number.MAX_VALUE,cache_creation_input_tokens:0})"), "—");
+});
+
+test("cache summary uses combined counters for all accounts and selected-account totals", () => {
+  const { run, element } = app();
+  run(`const usageAccounts = [
+    {login:'small',totals:{input_tokens:1,cache_read_input_tokens:9,cache_creation_input_tokens:0}},
+    {login:'large',totals:{input_tokens:90,cache_read_input_tokens:10,cache_creation_input_tokens:0}}
+  ]; renderDashboard({accounts:usageAccounts,totals:{input_tokens:91,cache_read_input_tokens:19,cache_creation_input_tokens:0}});`);
+  assert.ok(element("metrics").innerHTML.includes("17.3%"));
+  assert.ok(!element("metrics").innerHTML.includes("50%"));
+  assert.equal((element("metrics").innerHTML.match(/class="metric"/g) ?? []).length, 4);
+  run("state.account='small';renderDashboard({accounts:usageAccounts,totals:usageAccounts[0].totals})");
+  assert.ok(element("metrics").innerHTML.includes("90%"));
+  assert.equal((element("metrics").innerHTML.match(/class="metric"/g) ?? []).length, 8);
+});
+
+test("cache column sorts unrounded rates and keeps missing rates last", () => {
+  const { run, element } = app();
+  run(`const cacheModels = [
+    {model:'missing'},
+    {model:'alpha',input_tokens:9999,cache_read_input_tokens:11,cache_creation_input_tokens:0},
+    {model:'zeta',input_tokens:9999,cache_read_input_tokens:10,cache_creation_input_tokens:0},
+    {model:'zero',input_tokens:10,cache_read_input_tokens:0,cache_creation_input_tokens:0}
+  ]; sorts.models={column:5,direction:1};renderModels(cacheModels);`);
+  const names = () => [...element("models").innerHTML.matchAll(/class="text-cell">([^<]+)/g)].map((match) => match[1]);
+  assert.deepEqual(names(), ["zero", "zeta", "alpha", "missing"]);
+  assert.equal((element("models").innerHTML.match(/>0\.1%<\/td>/g) ?? []).length, 2);
+  run("sorts.models.direction=-1;renderModels(cacheModels)");
+  assert.deepEqual(names(), ["alpha", "zeta", "zero", "missing"]);
+});
+
+test("event duration distinguishes missing and zero and follows upstream units", () => {
+  const { run } = app();
+  for (const [value, expected] of [[0, "0 ms"], [12.5, "13 ms"], [999, "999 ms"], [1000, "1.00 s"], [1234.5, "1.23 s"], [null, "—"], [-1, "—"], ["5", "—"]]) {
+    assert.equal(run(`duration(${JSON.stringify(value)})`), expected);
+  }
+  for (const expression of ["undefined", "NaN", "Infinity", "-Infinity"]) assert.equal(run(`duration(${expression})`), "—");
+});
+
+test("events show HTTP completion outcomes and retain timing through pagination", () => {
+  const { run, element } = app();
+  const items = [
+    { model: "completed", duration_ms: 1234.5, request_outcome: "completed" },
+    { model: "cancelled", duration_ms: 0, request_outcome: "cancelled" },
+    { model: "error", duration_ms: 12.5, request_outcome: "error" },
+    { model: "historical", duration_ms: null, request_outcome: null },
+    { model: "unknown", request_outcome: "<img src=x onerror=alert(1)>" },
+  ];
+  run(`renderEvents(${JSON.stringify({ page: 2, total_pages: 3, total: 45, items })})`);
+  const html = element("events").innerHTML;
+  assert.ok(html.includes("HTTP/body completion. Completed does not certify model success."));
+  assert.ok(html.includes('<td class="number">1.23 s</td>'));
+  assert.ok(html.includes('<td class="number">0 ms</td>'));
+  assert.ok(html.includes('<td class="number">13 ms</td>'));
+  for (const value of ["Completed", "Cancelled", "Error"]) assert.ok(html.includes(`<td>${value}</td>`));
+  assert.equal((html.match(/<td>—<\/td><\/tr>/g) ?? []).length, 2);
+  assert.ok(!html.includes("<img"));
+  assert.ok(!html.includes("<td>Success</td>"));
+  assert.equal(element("page-label").textContent, "Page 2 of 3");
+  assert.equal(element("previous").disabled, false);
+  assert.equal(element("next").disabled, false);
+});
+
 test("numeric sorting uses original values, keeps missing last, and does not mutate input", () => {
   const { run, element } = app();
   run(`const models = [
@@ -286,7 +365,7 @@ test("cost sorting permits a single currency and resets when currencies become i
   run(`const models = [
     {model:'A',costs:[{currency:'USD',total_cost_nanos:200}]},
     {model:'B',costs:[{currency:'USD',total_cost_nanos:100}]}
-  ]; sorts.models = {column:7,direction:1}; renderModels(models);`);
+  ]; sorts.models = {column:8,direction:1}; renderModels(models);`);
   assert.ok(element("models").innerHTML.indexOf('class="text-cell">B') < element("models").innerHTML.indexOf('class="text-cell">A'));
   run("models[1].costs[0].currency = 'EUR'; renderModels(models)");
   assert.ok(element("models").innerHTML.includes('disabled title="Cost sorting requires a single currency"'));
