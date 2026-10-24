@@ -12,7 +12,7 @@ func TestParse(t *testing.T) {
 	t.Chdir(t.TempDir())
 	lookup := func(string) (string, bool) { return "", false }
 	c, err := Parse(lookup)
-	if err != nil || c.ListenAddr != ":9000" || c.BasePath != "/" || c.RequestTimeout != 5*time.Second || c.MaxConcurrency != 32 || c.EndpointsFile != "/config/endpoints.yaml" || c.DockerImage != "ghcr.io/caozhiyuan/copilot-api:latest" || c.PersistenceEnabled || c.DatabasePath != "/data/dashboard.sqlite" || c.SyncInterval != 10*time.Minute || c.LogLevel.String() != "INFO" {
+	if err != nil || c.ListenAddr != ":9000" || c.BasePath != "/" || c.RequestTimeout != 5*time.Second || c.MaxConcurrency != 32 || c.EndpointsFile != "/config/endpoints.yaml" || c.AccountAliasesFile != "" || c.DockerImage != "ghcr.io/caozhiyuan/copilot-api:latest" || c.PersistenceEnabled || c.DatabasePath != "/data/dashboard.sqlite" || c.SyncInterval != 10*time.Minute || c.LogLevel.String() != "INFO" {
 		t.Fatalf("defaults: %+v, %v", c, err)
 	}
 	for _, tc := range []struct{ key, value string }{
@@ -26,10 +26,10 @@ func TestParse(t *testing.T) {
 		})
 	}
 	c, err = Parse(func(k string) (string, bool) {
-		v, ok := map[string]string{"LISTEN_ADDR": "127.0.0.1:9100", "BASE_PATH": "/copilot-dashboard/", "REQUEST_TIMEOUT": "2s", "MAX_CONCURRENCY": "4", "PERSISTENCE_ENABLED": "true", "DATABASE_PATH": "/tmp/test.sqlite", "SYNC_INTERVAL": "2m", "LOG_LEVEL": "debug"}[strings.TrimPrefix(k, "COPILOT_API_DASHBOARD_")]
+		v, ok := map[string]string{"LISTEN_ADDR": "127.0.0.1:9100", "BASE_PATH": "/copilot-dashboard/", "ACCOUNT_ALIASES_FILE": "/custom/account-aliases.yaml", "REQUEST_TIMEOUT": "2s", "MAX_CONCURRENCY": "4", "PERSISTENCE_ENABLED": "true", "DATABASE_PATH": "/tmp/test.sqlite", "SYNC_INTERVAL": "2m", "LOG_LEVEL": "debug"}[strings.TrimPrefix(k, "COPILOT_API_DASHBOARD_")]
 		return v, ok
 	})
-	if err != nil || c.BasePath != "/copilot-dashboard" || c.MaxConcurrency != 4 || c.RequestTimeout != 2*time.Second || !c.PersistenceEnabled || c.DatabasePath != "/tmp/test.sqlite" || c.SyncInterval != 2*time.Minute || c.LogLevel.String() != "DEBUG" {
+	if err != nil || c.BasePath != "/copilot-dashboard" || c.AccountAliasesFile != "/custom/account-aliases.yaml" || c.MaxConcurrency != 4 || c.RequestTimeout != 2*time.Second || !c.PersistenceEnabled || c.DatabasePath != "/tmp/test.sqlite" || c.SyncInterval != 2*time.Minute || c.LogLevel.String() != "DEBUG" {
 		t.Fatalf("overrides: %+v %v", c, err)
 	}
 	for _, values := range []map[string]string{

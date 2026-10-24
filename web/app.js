@@ -9,13 +9,40 @@ function tokens(value) {
   return numeric(value) ? escapeHTML(compact.format(value)) : "—";
 }
 const empty = (message = "—") => `<p class="empty">${escapeHTML(message)}</p>`;
-const state = { account: "", period: "last_30_days", page: 1, totalPages: 1, dashboardErrors: [], eventErrors: [] };
+const state = { account: "", period: "last_30_days", page: 1, totalPages: 1, dashboardErrors: [], eventErrors: [], showAccountNames: false };
 let dashboardController;
 let eventsController;
 let refreshID = 0;
 let chartDays = null;
+let hasAccountAliases = false;
 const tableViews = new Map();
-const sorts = { accounts: { column: 2, direction: -1 }, models: { column: 5, direction: -1 }, days: { column: 0, direction: 1 } };
+const sorts = { accounts: { column: 3, direction: -1 }, models: { column: 6, direction: -1 }, days: { column: 0, direction: 1 } };
+
+function cacheHitRate(usage) {
+  const counts = [usage?.input_tokens, usage?.cache_read_input_tokens, usage?.cache_creation_input_tokens];
+  if (counts.some((value) => !numeric(value) || value < 0)) return null;
+  const total = counts.reduce((sum, value) => sum + value, 0);
+  return numeric(total) && total > 0 ? usage.cache_read_input_tokens / total * 100 : null;
+}
+
+function cacheHitRateText(usage) {
+  const rate = cacheHitRate(usage);
+  return rate === null ? "—" : `${percent(rate)}%`;
+}
+
+function duration(value) {
+  if (!numeric(value) || value < 0) return "—";
+  return value < 1000 ? `${value.toFixed(0)} ms` : `${(value / 1000).toFixed(2)} s`;
+}
+
+function requestOutcome(value) {
+  switch (value) {
+    case "completed": return "Completed";
+    case "cancelled": return "Cancelled";
+    case "error": return "Error";
+    default: return "—";
+  }
+}
 
 function money(costs) {
   if (!Array.isArray(costs) || costs.length === 0) return "—";
@@ -36,7 +63,7 @@ function headerCell(label, index, sortID, disabledCost, className = "", attribut
 }
 
 function table(label, headers, rows, sortID, disabledCost = false) {
-  const cells = headers.map((header, index) => headerCell(header, index, sortID, disabledCost, index && !["Model", "Plan", "Endpoint", "Target", "Operation", "Error"].includes(header) ? "number" : "")).join("");
+  const cells = headers.map((header, index) => headerCell(header, index, sortID, disabledCost, index && !["Model", "Plan", "Endpoint", "Outcome", "Target", "Operation", "Error"].includes(header) ? "number" : "", header === "Outcome" ? ' title="HTTP/body completion. Completed does not certify model success."' : "")).join("");
   return `<div class="table-scroll"${sortID ? ` data-table="${sortID}"` : ""} tabindex="0" role="region" aria-label="${escapeHTML(label)}"><table><caption class="sr-only">${escapeHTML(label)}</caption><thead><tr>${cells}</tr></thead><tbody>${rows.join("")}</tbody></table></div>`;
 }
 
@@ -60,19 +87,33 @@ function sortableTable(id, label, headers, items, getters, renderRow, costs) {
   return view();
 }
 
+function redrawTable(id) {
+  const container = document.querySelector(`[data-table="${id}"]`), scrollLeft = container.scrollLeft;
+  const focused = document.activeElement, restoreFocus = container.contains(focused);
+  const column = restoreFocus ? focused.closest("button[data-sort]")?.dataset.column : undefined;
+  container.outerHTML = tableViews.get(id)();
+  const replacement = document.querySelector(`[data-table="${id}"]`);
+  replacement.scrollLeft = scrollLeft;
+  if (restoreFocus) (column == null ? replacement : replacement.querySelector(`[data-column="${column}"]`)).focus({ preventScroll: true });
+}
+
 function costValue(costs) {
   return costs?.length === 1 && numeric(costs[0].total_cost_nanos) ? costs[0].total_cost_nanos : null;
 }
 
+function validMeteredQuota(quota) {
+  return quota?.unlimited === false && numeric(quota.entitlement) && quota.entitlement > 0 && numeric(quota.remaining);
+}
+
 function usedValue(quota) {
-  return quota?.unlimited === false && numeric(quota.entitlement) && numeric(quota.remaining) ? quota.entitlement - quota.remaining : null;
+  return numeric(quota?.credits_used) ? quota.credits_used : null;
 }
 
 function usedPercentValue(quota) {
-  if (quota?.unlimited !== false) return null;
-  if (numeric(quota.percent_remaining)) return 100 - quota.percent_remaining;
+  if (!validMeteredQuota(quota)) return null;
   const used = usedValue(quota);
-  return numeric(used) && numeric(quota.entitlement) && quota.entitlement > 0 ? used / quota.entitlement * 100 : null;
+  if (numeric(used)) return used / quota.entitlement * 100;
+  return numeric(quota.percent_remaining) ? 100 - quota.percent_remaining : null;
 }
 
 function metric(label, value) {
@@ -80,17 +121,17 @@ function metric(label, value) {
 }
 
 function quotaUsed(quota) {
-  if (quota?.unlimited === true) return "—";
   return number(usedValue(quota));
 }
 
 function quotaRemaining(quota) {
   if (quota?.unlimited === true) return "Unlimited";
-  return number(quota?.remaining);
+  return validMeteredQuota(quota) ? number(quota.remaining) : "—";
 }
 
 function quotaTotal(quota) {
-  return quota?.unlimited === true ? "Unlimited" : number(quota?.entitlement);
+  if (quota?.unlimited === true) return "Unlimited";
+  return validMeteredQuota(quota) ? number(quota.entitlement) : "—";
 }
 
 function quotaUsage(quota) {
@@ -107,7 +148,7 @@ function renderQuotas(account) {
   $("quotas").innerHTML = [["chat", "Chat"], ["completions", "Completions"], ["premium_interactions", "Premium interactions"]].map(([key, label]) => {
     const q = account?.quota_snapshots?.[key];
     const unlimited = q?.unlimited === true;
-    const usedPercent = !unlimited && numeric(q?.percent_remaining) ? 100 - q.percent_remaining : null;
+    const usedPercent = usedPercentValue(q);
     const progress = unlimited ? 100 : numeric(usedPercent) ? Math.min(100, Math.max(0, usedPercent)) : null;
     return `<article class="quota"><div class="quota-top"><h3>${label}</h3><span class="${unlimited ? "unlimited" : "muted"}">${unlimited ? "Unlimited" : numeric(usedPercent) ? `${percent(usedPercent)}% used` : "—"}</span></div>
       ${progress === null ? empty() : `<progress value="${progress}" max="100" aria-label="${label}: ${unlimited ? "unlimited" : `${percent(usedPercent)}% used`}"></progress>`}
@@ -119,6 +160,7 @@ function renderMetrics(totals) {
   $("metrics").classList.toggle("single", Boolean(state.account));
   const values = [metric("Total tokens", tokens(totals?.total_tokens)), metric("Requests", number(totals?.request_count)), metric("Cost", money(totals?.costs))];
   if (state.account) values.push(metric("Input tokens", tokens(totals?.input_tokens)), metric("Output tokens", tokens(totals?.output_tokens)), metric("Cache read", tokens(totals?.cache_read_input_tokens)), metric("Cache creation", tokens(totals?.cache_creation_input_tokens)));
+  values.push(metric("Cache hit rate", cacheHitRateText(totals)));
   $("metrics").innerHTML = values.join("");
 }
 
@@ -144,7 +186,6 @@ function setupTrendInteraction(days, geometry) {
     guide.hidden = true;
     active.hidden = true;
     tooltip.hidden = true;
-    plot.style.paddingBottom = "";
   };
   const show = (index) => {
     if (index < 0 || index >= days.length) return;
@@ -159,21 +200,30 @@ function setupTrendInteraction(days, geometry) {
     active.hidden = false;
     tooltip.innerHTML = trendTooltip(days[index]);
     tooltip.hidden = false;
-    plot.style.paddingBottom = "";
 
-    const bounds = svg.getBoundingClientRect();
+    const bounds = svg.getBoundingClientRect(), plotBounds = plot.getBoundingClientRect();
     const scale = Math.min(bounds.width / width, bounds.height / height);
     const offsetX = (bounds.width - width * scale) / 2, offsetY = (bounds.height - height * scale) / 2;
     const tooltipWidth = tooltip.offsetWidth, tooltipHeight = tooltip.offsetHeight;
-    const screenX = offsetX + pointX * scale, screenY = offsetY + pointY * scale;
-    tooltip.style.left = `${Math.min(bounds.width - tooltipWidth - 8, Math.max(8, screenX - tooltipWidth / 2))}px`;
-    const above = screenY - tooltipHeight - 12, below = screenY + 12;
-    if (above >= 4) tooltip.style.top = `${above}px`;
-    else if (below + tooltipHeight <= bounds.height - 4) tooltip.style.top = `${below}px`;
+    const screenX = bounds.left - plotBounds.left + offsetX + pointX * scale;
+    const screenY = bounds.top - plotBounds.top + offsetY + pointY * scale;
+    const inset = 8, gap = 12;
+    const minLeft = inset, maxLeft = Math.max(minLeft, plotBounds.width - tooltipWidth - inset);
+    const minTop = inset, maxTop = Math.max(minTop, plotBounds.height - tooltipHeight - inset);
+    const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+    let tooltipLeft = clamp(screenX - tooltipWidth / 2, minLeft, maxLeft);
+    let tooltipTop;
+    const above = screenY - tooltipHeight - gap, below = screenY + gap;
+    if (above >= minTop) tooltipTop = above;
+    else if (below <= maxTop) tooltipTop = below;
     else {
-      tooltip.style.top = `${bounds.height + 8}px`;
-      plot.style.paddingBottom = `${tooltipHeight + 16}px`;
+      const besideLeft = screenX - tooltipWidth - gap, besideRight = screenX + gap;
+      if (besideLeft >= minLeft) tooltipLeft = besideLeft;
+      else if (besideRight <= maxLeft) tooltipLeft = besideRight;
+      tooltipTop = clamp(screenY - tooltipHeight / 2, minTop, maxTop);
     }
+    tooltip.style.left = `${tooltipLeft}px`;
+    tooltip.style.top = `${tooltipTop}px`;
   };
   const showAtPointer = (event) => {
     const bounds = svg.getBoundingClientRect();
@@ -234,16 +284,21 @@ function renderTrend(days) {
 function renderModels(models) {
   if (!Array.isArray(models)) { $("models").innerHTML = empty(); return; }
   if (!models.length) { $("models").innerHTML = empty("No model usage for this period."); return; }
-  $("models").innerHTML = sortableTable("models", "Model breakdown", ["Model", "Input", "Output", "Cache read", "Cache creation", "Tokens", "Requests", "Cost"], models,
-    [(m) => m.model, ...["input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens", "total_tokens", "request_count"].map((key) => (m) => m[key]), (m) => costValue(m.costs)],
-    (m) => `<tr><td class="text-cell">${escapeHTML(m.model)}</td>${[m.input_tokens, m.output_tokens, m.cache_read_input_tokens, m.cache_creation_input_tokens, m.total_tokens].map((v) => `<td class="number">${tokens(v)}</td>`).join("")}<td class="number">${number(m.request_count)}</td><td class="number">${money(m.costs)}</td></tr>`, (m) => m.costs);
+  $("models").innerHTML = sortableTable("models", "Model breakdown", ["Model", "Input", "Output", "Cache read", "Cache creation", "Cache hit rate", "Tokens", "Requests", "Cost"], models,
+    [(m) => m.model, ...["input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"].map((key) => (m) => m[key]), cacheHitRate, (m) => m.total_tokens, (m) => m.request_count, (m) => costValue(m.costs)],
+    (m) => `<tr><td class="text-cell">${escapeHTML(m.model)}</td>${[m.input_tokens, m.output_tokens, m.cache_read_input_tokens, m.cache_creation_input_tokens].map((v) => `<td class="number">${tokens(v)}</td>`).join("")}<td class="number">${cacheHitRateText(m)}</td><td class="number">${tokens(m.total_tokens)}</td><td class="number">${number(m.request_count)}</td><td class="number">${money(m.costs)}</td></tr>`, (m) => m.costs);
 }
 
 function renderAccounts(accounts) {
+  hasAccountAliases = accounts.some((a) => a.display_name);
   if (!accounts.length) { $("accounts").innerHTML = empty("No accounts available."); return; }
+  const names = accounts.map((a) => a.display_name || a.login), counts = new Map();
+  for (const name of names) counts.set(name, (counts.get(name) ?? 0) + 1);
+  const labels = new Map(accounts.map((a, i) => [a.login, a.display_name && counts.get(names[i]) > 1 ? `${names[i]} (${a.login})` : names[i]]));
+  const accountName = (a) => state.showAccountNames ? labels.get(a.login) : a.login;
   $("accounts").innerHTML = sortableTable("accounts", "Account usage", ["Account", "Plan", "Usage", "Used", "Remaining", "Total", "Tokens", "Requests", "Cost"], accounts,
-    [(a) => a.login, (a) => a.copilot_plan, (a) => usedPercentValue(a.quota_snapshots?.premium_interactions), (a) => usedValue(a.quota_snapshots?.premium_interactions), (a) => a.quota_snapshots?.premium_interactions?.unlimited === false ? a.quota_snapshots.premium_interactions.remaining : null, (a) => a.quota_snapshots?.premium_interactions?.unlimited === false ? a.quota_snapshots.premium_interactions.entitlement : null, (a) => a.totals?.total_tokens, (a) => a.totals?.request_count, (a) => costValue(a.totals?.costs)],
-    (a) => `<tr><td class="text-cell">${escapeHTML(a.login)}</td><td>${escapeHTML(a.copilot_plan)}</td><td class="number">${quotaUsage(a.quota_snapshots?.premium_interactions)}</td><td class="number">${quotaUsed(a.quota_snapshots?.premium_interactions)}</td><td class="number">${quotaRemaining(a.quota_snapshots?.premium_interactions)}</td><td class="number">${quotaTotal(a.quota_snapshots?.premium_interactions)}</td><td class="number">${tokens(a.totals?.total_tokens)}</td><td class="number">${number(a.totals?.request_count)}</td><td class="number">${money(a.totals?.costs)}</td></tr>`, (a) => a.totals?.costs);
+    [accountName, (a) => a.copilot_plan, (a) => usedPercentValue(a.quota_snapshots?.premium_interactions), (a) => usedValue(a.quota_snapshots?.premium_interactions), (a) => validMeteredQuota(a.quota_snapshots?.premium_interactions) ? a.quota_snapshots.premium_interactions.remaining : null, (a) => validMeteredQuota(a.quota_snapshots?.premium_interactions) ? a.quota_snapshots.premium_interactions.entitlement : null, (a) => a.totals?.total_tokens, (a) => a.totals?.request_count, (a) => costValue(a.totals?.costs)],
+    (a) => `<tr><td class="text-cell">${escapeHTML(accountName(a))}</td><td>${escapeHTML(a.copilot_plan)}</td><td class="number">${quotaUsage(a.quota_snapshots?.premium_interactions)}</td><td class="number">${quotaUsed(a.quota_snapshots?.premium_interactions)}</td><td class="number">${quotaRemaining(a.quota_snapshots?.premium_interactions)}</td><td class="number">${quotaTotal(a.quota_snapshots?.premium_interactions)}</td><td class="number">${tokens(a.totals?.total_tokens)}</td><td class="number">${number(a.totals?.request_count)}</td><td class="number">${money(a.totals?.costs)}</td></tr>`, (a) => a.totals?.costs);
 }
 
 function renderErrors() {
@@ -293,10 +348,10 @@ function renderEvents(data) {
   $("page-label").textContent = `Page ${number(data.page)} of ${number(data.total_pages)}`;
   $("previous").disabled = data.page <= 1;
   $("next").disabled = data.page >= data.total_pages;
-  $("events").innerHTML = data.items.length ? table("Request events", ["Time", "Model", "Endpoint", "Input", "Output", "Cache read", "Cache creation", "Tokens", "Cost"], data.items.map((e) => {
+  $("events").innerHTML = data.items.length ? table("Request events", ["Time", "Model", "Endpoint", "Input", "Output", "Cache read", "Cache creation", "Duration", "Tokens", "Cost", "Outcome"], data.items.map((e) => {
     const date = new Date(e.created_at_ms);
     const time = Number.isNaN(date.getTime()) ? "—" : date.toLocaleString("en-US");
-    return `<tr><td title="${escapeHTML(e.created_at_utc)}">${escapeHTML(time)}</td><td class="text-cell">${escapeHTML(e.model)}</td><td>${escapeHTML(e.endpoint)}</td>${[e.input_tokens, e.output_tokens, e.cache_read_input_tokens, e.cache_creation_input_tokens, e.total_tokens].map((v) => `<td class="number">${tokens(v)}</td>`).join("")}<td class="number">${money(e.cost ? [e.cost] : null)}</td></tr>`;
+    return `<tr><td title="${escapeHTML(e.created_at_utc)}">${escapeHTML(time)}</td><td class="text-cell">${escapeHTML(e.model)}</td><td>${escapeHTML(e.endpoint)}</td>${[e.input_tokens, e.output_tokens, e.cache_read_input_tokens, e.cache_creation_input_tokens].map((v) => `<td class="number">${tokens(v)}</td>`).join("")}<td class="number">${duration(e.duration_ms)}</td><td class="number">${tokens(e.total_tokens)}</td><td class="number">${money(e.cost ? [e.cost] : null)}</td><td>${requestOutcome(e.request_outcome)}</td></tr>`;
   })) : empty("No request events for this period.");
 }
 
@@ -396,17 +451,22 @@ $("account").addEventListener("change", () => { state.account = $("account").val
 $("period").addEventListener("change", () => { state.period = $("period").value; void refresh(); });
 $("previous").addEventListener("click", () => { if (state.page > 1) { state.page--; void loadEvents(); } });
 $("next").addEventListener("click", () => { if (state.page < state.totalPages) { state.page++; void loadEvents(); } });
+document.addEventListener("keydown", (event) => {
+  if (!["d", "D"].includes(event.key) || event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey || event.repeat || event.isComposing) return;
+  if (event.target?.isContentEditable || event.target?.closest?.("input, textarea, select")) return;
+  if ($("accounts-section").hidden || !hasAccountAliases || !tableViews.has("accounts")) return;
+  event.preventDefault();
+  state.showAccountNames = !state.showAccountNames;
+  redrawTable("accounts");
+  $("announcement").textContent = state.showAccountNames ? "Account display names shown." : "Account logins shown.";
+});
 $("content").addEventListener("click", (event) => {
   const button = event.target.closest("button[data-sort]");
   if (!button || button.disabled) return;
   const id = button.dataset.sort, column = Number(button.dataset.column), sort = sorts[id];
   sort.direction = sort.column === column ? -sort.direction : 1;
   sort.column = column;
-  const container = button.closest(".table-scroll"), scrollLeft = container.scrollLeft;
-  container.outerHTML = tableViews.get(id)();
-  const replacement = document.querySelector(`[data-table="${id}"]`);
-  replacement.scrollLeft = scrollLeft;
-  replacement.querySelector(`[data-column="${column}"]`).focus({ preventScroll: true });
+  redrawTable(id);
 });
 let chartWidth = 0;
 new ResizeObserver(([entry]) => {

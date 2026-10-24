@@ -15,6 +15,7 @@ type Config struct {
 	ListenAddr         string
 	BasePath           string
 	EndpointsFile      string
+	AccountAliasesFile string
 	DockerImage        string
 	RequestTimeout     time.Duration
 	MaxConcurrency     int
@@ -38,6 +39,7 @@ func Parse(lookup func(string) (string, bool)) (Config, error) {
 		endpointsFile = "config/endpoints.yaml"
 	}
 	c := Config{ListenAddr: get("LISTEN_ADDR", ":9000"), EndpointsFile: get("ENDPOINTS_FILE", endpointsFile), DockerImage: get("DOCKER_IMAGE", "ghcr.io/caozhiyuan/copilot-api:latest")}
+	c.AccountAliasesFile = get("ACCOUNT_ALIASES_FILE", "")
 	_, port, err := net.SplitHostPort(c.ListenAddr)
 	n, portErr := strconv.Atoi(port)
 	if err != nil || portErr != nil || n < 1 || n > 65535 {

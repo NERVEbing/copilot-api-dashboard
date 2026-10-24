@@ -13,6 +13,7 @@ import (
 
 	"github.com/NERVEbing/copilot-api-dashboard/internal/dashboard"
 	"github.com/NERVEbing/copilot-api-dashboard/internal/discovery"
+	sqlitestore "github.com/NERVEbing/copilot-api-dashboard/internal/store/sqlite"
 	"github.com/NERVEbing/copilot-api-dashboard/internal/upstream"
 )
 
@@ -94,6 +95,33 @@ func TestRoutesAndValidation(t *testing.T) {
 	}
 }
 
+func TestPersistentSyncReturnsEmptyErrorsArray(t *testing.T) {
+	history, err := sqlitestore.Open(filepath.Join(t.TempDir(), "dashboard.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := history.Close(); err != nil {
+			t.Errorf("close persistence database: %v", err)
+		}
+	})
+	h := New(&dashboard.Service{Discovery: noDiscovery{}, History: history}, "/copilot-dashboard")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/copilot-dashboard/api/v1/sync", nil))
+	var got struct {
+		Data struct {
+			Synced bool `json:"synced"`
+		} `json:"data"`
+		Errors []discovery.Failure `json:"errors"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if w.Code != http.StatusOK || !got.Data.Synced || got.Errors == nil || len(got.Errors) != 0 {
+		t.Fatalf("persistent sync response: %d %s", w.Code, w.Body.String())
+	}
+}
+
 func TestHTTPVerticalSlice(t *testing.T) {
 	fixtures := map[string][]byte{}
 	for path, name := range map[string]string{"/usage": "usage", "/token-usage": "summary", "/token-usage/daily": "daily", "/token-usage/events": "events"} {
@@ -123,7 +151,7 @@ func TestHTTPVerticalSlice(t *testing.T) {
 	d := &discovery.Discoverer{File: file, Timeout: time.Second, SocketExists: func() (bool, error) { return false, nil }, LookupEnv: func(key string) (string, bool) { return "private-test-key", key == "TEST_KEY" }}
 	c := upstream.New(time.Second, 2)
 	defer c.Close()
-	srv := httptest.NewServer(New(&dashboard.Service{Discovery: d, Upstream: c}, "/"))
+	srv := httptest.NewServer(New(&dashboard.Service{Discovery: d, Upstream: c, AccountAliases: map[string]string{"account-a": "Display Account"}}, "/"))
 	defer srv.Close()
 	res, err := http.Get(srv.URL + "/api/v1/dashboard")
 	if err != nil {
@@ -140,6 +168,9 @@ func TestHTTPVerticalSlice(t *testing.T) {
 	}
 	if res.StatusCode != 200 || out.Data.Totals.Tokens != 180 || len(out.Errors) != 1 || out.Errors[0].Target != "failed" || out.Errors[0].Message != "upstream returned HTTP 503" {
 		t.Fatalf("dashboard: %+v", out)
+	}
+	if len(out.Data.Accounts) != 1 || out.Data.Accounts[0].Login != "Account-A" || out.Data.Accounts[0].DisplayName != "Display Account" {
+		t.Fatalf("account identity and display name: %+v", out.Data.Accounts)
 	}
 	encoded, _ := json.Marshal(out)
 	if strings.Contains(string(encoded), "private-test-key") {
@@ -160,6 +191,9 @@ func TestHTTPVerticalSlice(t *testing.T) {
 	}
 	if res2.StatusCode != 200 || events.Data.Page != 2 || events.Data.PageSize != 1 || events.Data.Items[0].Cost.Nanos != 123 || len(events.Errors) != 1 {
 		t.Fatalf("events: %+v", events)
+	}
+	if event := events.Data.Items[0]; event.DurationMS == nil || *event.DurationMS != 1234.5 || event.Outcome == nil || *event.Outcome != "completed" {
+		t.Fatalf("event timing did not reach the HTTP response: %+v", event)
 	}
 }
 

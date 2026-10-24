@@ -6,6 +6,7 @@ require (
 	github.com/moby/moby/api v1.56.0
 	github.com/moby/moby/client v0.6.0
 	go.yaml.in/yaml/v3 v3.0.4
+	golang.org/x/sync v0.22.0
 	modernc.org/sqlite v1.58.0
 )
 

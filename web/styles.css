@@ -30,9 +30,9 @@ section { margin-bottom: 18px; min-width: 0; }
 .panel-header { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; padding: 14px 16px; border-bottom: 1px solid var(--border); }
 .panel-header h2 { margin: 0; }
 .muted { color: var(--muted); font-size: 12px; }
-.metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); overflow: hidden; }
+.metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); overflow: hidden; }
 .metrics > .empty { grid-column: 1 / -1; background: var(--surface); }
-.metrics.single { grid-template-columns: repeat(7, minmax(0, 1fr)); }
+.metrics.single { grid-template-columns: repeat(8, minmax(0, 1fr)); }
 .metric { padding: 18px; min-width: 0; background: var(--surface); border-right: 1px solid var(--border); }
 .metric:last-child { border-right: 0; }
 .metric-label { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
