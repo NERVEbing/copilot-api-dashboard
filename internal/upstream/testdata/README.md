@@ -17,3 +17,10 @@ The Dashboard currently decodes duration and outcome for display; the other new
 fields are ignored. Missing or null timing remains unavailable, rather than zero.
 Unknown upstream fields are ignored; missing account identity or required dataset
 structure is rejected.
+
+Quota calculations follow Microsoft VS Code's `getQuotaUsage` at commit
+`3ac0f0563e382d8e3480c787d04a2d05afca6746`, inspected on 2026-10-26, in
+`src/vs/workbench/services/chat/common/chatEntitlementService.ts`. The client
+accepts numeric or numeric-string entitlements and preserves `has_quota`.
+Frontend tests cover independent credits, fractional remaining quotas,
+percentage-only snapshots, zero entitlement, and unavailable pooled quotas.

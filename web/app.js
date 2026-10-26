@@ -102,18 +102,28 @@ function costValue(costs) {
 }
 
 function validMeteredQuota(quota) {
-  return quota?.unlimited === false && numeric(quota.entitlement) && quota.entitlement > 0 && numeric(quota.remaining);
+  return quota?.unlimited === false && numeric(quota.entitlement) && quota.entitlement > 0;
+}
+
+function remainingValue(quota) {
+  if (quota?.unlimited !== false || quota.entitlement === 0) return null;
+  return numeric(quota.quota_remaining) && quota.quota_remaining >= 0 ? quota.quota_remaining : null;
 }
 
 function usedValue(quota) {
-  return numeric(quota?.credits_used) ? quota.credits_used : null;
+  if (quota?.unlimited === true) {
+    return quota.has_quota !== false && numeric(quota.credits_used) && quota.credits_used >= 0 ? quota.credits_used : null;
+  }
+  if (!validMeteredQuota(quota)) return null;
+  const remaining = remainingValue(quota);
+  if (numeric(remaining)) return Math.max(0, quota.entitlement - remaining);
+  const usedPercent = usedPercentValue(quota);
+  return numeric(usedPercent) ? quota.entitlement * usedPercent / 100 : null;
 }
 
 function usedPercentValue(quota) {
-  if (!validMeteredQuota(quota)) return null;
-  const used = usedValue(quota);
-  if (numeric(used)) return used / quota.entitlement * 100;
-  return numeric(quota.percent_remaining) ? 100 - quota.percent_remaining : null;
+  if (quota?.unlimited !== false || quota.entitlement === 0) return null;
+  return numeric(quota.percent_remaining) ? 100 - Math.min(100, Math.max(0, quota.percent_remaining)) : null;
 }
 
 function metric(label, value) {
@@ -126,7 +136,7 @@ function quotaUsed(quota) {
 
 function quotaRemaining(quota) {
   if (quota?.unlimited === true) return "Unlimited";
-  return validMeteredQuota(quota) ? number(quota.remaining) : "—";
+  return number(remainingValue(quota));
 }
 
 function quotaTotal(quota) {
@@ -297,7 +307,7 @@ function renderAccounts(accounts) {
   const labels = new Map(accounts.map((a, i) => [a.login, a.display_name && counts.get(names[i]) > 1 ? `${names[i]} (${a.login})` : names[i]]));
   const accountName = (a) => state.showAccountNames ? labels.get(a.login) : a.login;
   $("accounts").innerHTML = sortableTable("accounts", "Account usage", ["Account", "Plan", "Usage", "Used", "Remaining", "Total", "Tokens", "Requests", "Cost"], accounts,
-    [accountName, (a) => a.copilot_plan, (a) => usedPercentValue(a.quota_snapshots?.premium_interactions), (a) => usedValue(a.quota_snapshots?.premium_interactions), (a) => validMeteredQuota(a.quota_snapshots?.premium_interactions) ? a.quota_snapshots.premium_interactions.remaining : null, (a) => validMeteredQuota(a.quota_snapshots?.premium_interactions) ? a.quota_snapshots.premium_interactions.entitlement : null, (a) => a.totals?.total_tokens, (a) => a.totals?.request_count, (a) => costValue(a.totals?.costs)],
+    [accountName, (a) => a.copilot_plan, (a) => usedPercentValue(a.quota_snapshots?.premium_interactions), (a) => usedValue(a.quota_snapshots?.premium_interactions), (a) => remainingValue(a.quota_snapshots?.premium_interactions), (a) => validMeteredQuota(a.quota_snapshots?.premium_interactions) ? a.quota_snapshots.premium_interactions.entitlement : null, (a) => a.totals?.total_tokens, (a) => a.totals?.request_count, (a) => costValue(a.totals?.costs)],
     (a) => `<tr><td class="text-cell">${escapeHTML(accountName(a))}</td><td>${escapeHTML(a.copilot_plan)}</td><td class="number">${quotaUsage(a.quota_snapshots?.premium_interactions)}</td><td class="number">${quotaUsed(a.quota_snapshots?.premium_interactions)}</td><td class="number">${quotaRemaining(a.quota_snapshots?.premium_interactions)}</td><td class="number">${quotaTotal(a.quota_snapshots?.premium_interactions)}</td><td class="number">${tokens(a.totals?.total_tokens)}</td><td class="number">${number(a.totals?.request_count)}</td><td class="number">${money(a.totals?.costs)}</td></tr>`, (a) => a.totals?.costs);
 }
 

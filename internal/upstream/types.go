@@ -1,15 +1,18 @@
 package upstream
 
+import "encoding/json"
+
 type Quota struct {
-	CreditsUsed      *float64 `json:"credits_used"`
-	Entitlement      *float64 `json:"entitlement"`
-	OverageCount     *float64 `json:"overage_count"`
-	OveragePermitted *bool    `json:"overage_permitted"`
-	PercentRemaining *float64 `json:"percent_remaining"`
-	QuotaID          string   `json:"quota_id"`
-	QuotaRemaining   *float64 `json:"quota_remaining"`
-	Remaining        *float64 `json:"remaining"`
-	Unlimited        *bool    `json:"unlimited"`
+	CreditsUsed      *float64     `json:"credits_used"`
+	Entitlement      *json.Number `json:"entitlement"`
+	HasQuota         *bool        `json:"has_quota"`
+	OverageCount     *float64     `json:"overage_count"`
+	OveragePermitted *bool        `json:"overage_permitted"`
+	PercentRemaining *float64     `json:"percent_remaining"`
+	QuotaID          string       `json:"quota_id"`
+	QuotaRemaining   *float64     `json:"quota_remaining"`
+	Remaining        *float64     `json:"remaining"`
+	Unlimited        *bool        `json:"unlimited"`
 }
 
 type Quotas struct {

@@ -212,10 +212,44 @@ func TestInvalidDatasetAndNullFields(t *testing.T) {
 		t.Fatal("missing events accepted")
 	}
 	var u Usage
-	if err := json.Unmarshal([]byte(`{"login":"a","quota_snapshots":{"chat":{"unlimited":false,"remaining":0}}}`), &u); err != nil {
+	if err := json.Unmarshal([]byte(`{"login":"a","quota_snapshots":{"chat":{"unlimited":false,"has_quota":false,"remaining":0}}}`), &u); err != nil {
 		t.Fatal(err)
 	}
-	if u.Quotas.Chat.Remaining == nil || *u.Quotas.Chat.Remaining != 0 || u.Quotas.Chat.Entitlement != nil || u.Quotas.Completions != nil {
+	if u.Quotas.Chat.Remaining == nil || *u.Quotas.Chat.Remaining != 0 || u.Quotas.Chat.Entitlement != nil || u.Quotas.Chat.HasQuota == nil || *u.Quotas.Chat.HasQuota || u.Quotas.Completions != nil {
 		t.Fatal("missing and zero quotas conflated")
+	}
+}
+
+func TestQuotaEntitlementJSON(t *testing.T) {
+	for _, tc := range []struct {
+		name, input string
+		want        any
+	}{
+		{"number", `{"entitlement":13000}`, float64(13000)},
+		{"numeric string", `{"entitlement":"13000"}`, float64(13000)},
+		{"zero", `{"entitlement":"0"}`, float64(0)},
+		{"missing", `{}`, nil},
+		{"null", `{"entitlement":null}`, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var quota Quota
+			if err := json.Unmarshal([]byte(tc.input), &quota); err != nil {
+				t.Fatal(err)
+			}
+			data, err := json.Marshal(quota)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var response map[string]any
+			if err := json.Unmarshal(data, &response); err != nil {
+				t.Fatal(err)
+			}
+			if response["entitlement"] != tc.want {
+				t.Fatalf("entitlement: got %v, want %v", response["entitlement"], tc.want)
+			}
+		})
+	}
+	if err := json.Unmarshal([]byte(`{"entitlement":"invalid"}`), new(Quota)); err == nil {
+		t.Fatal("invalid entitlement accepted")
 	}
 }
