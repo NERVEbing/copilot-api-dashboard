@@ -12,6 +12,9 @@ const empty = (message = "—") => `<p class="empty">${escapeHTML(message)}</p>`
 const periods = ["today", "this_week", "last_7_days", "this_month", "last_30_days", "lifetime"];
 const defaultPeriod = "last_30_days";
 const timeZone = new Intl.DateTimeFormat().resolvedOptions().timeZone;
+const themeKey = "copilot-api-dashboard:theme";
+const themeNames = { auto: "Auto", light: "Light", dark: "Dark" };
+const themes = Object.keys(themeNames);
 const state = { account: "", period: defaultPeriod, page: 1, totalPages: 1, dashboardErrors: [], eventErrors: [], showAccountNames: false };
 let dashboardController;
 let eventsController;
@@ -527,12 +530,39 @@ function selectFilters(account, period) {
   void refresh();
 }
 
+function currentTheme() {
+  return document.documentElement.dataset.theme ?? "auto";
+}
+
+function nextTheme(theme) {
+  return themes[(themes.indexOf(theme) + 1) % themes.length];
+}
+
+function labelTheme(theme) {
+  $("theme").title = `${themeNames[theme]} theme (click for ${themeNames[nextTheme(theme)]})`;
+}
+
+function setTheme(theme) {
+  if (theme === "auto") delete document.documentElement.dataset.theme;
+  else document.documentElement.dataset.theme = theme;
+  labelTheme(theme);
+  $("announcement").textContent = `${themeNames[theme]} theme.`;
+  try {
+    if (theme === "auto") localStorage.removeItem(themeKey);
+    else localStorage.setItem(themeKey, theme);
+  } catch {
+    // Storage can be unavailable; the choice then lasts until the page reloads.
+  }
+}
+
 $("controls").addEventListener("submit", (event) => {
   event.preventDefault();
   if ($("refresh").getAttribute("aria-disabled") !== "true") void refresh(true);
 });
 $("account").addEventListener("change", () => selectFilters($("account").value, state.period));
 $("period").addEventListener("change", () => selectFilters(state.account, $("period").value));
+labelTheme(currentTheme());
+$("theme").addEventListener("click", () => setTheme(nextTheme(currentTheme())));
 window.addEventListener("popstate", () => {
   const { account, period } = locationFilters();
   if (account.toLowerCase() === state.account.toLowerCase() && period === state.period) return;

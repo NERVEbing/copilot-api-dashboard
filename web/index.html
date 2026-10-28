@@ -3,8 +3,10 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
   <title>Copilot API Dashboard</title>
   <link rel="icon" href="data:,">
+  <script>try { const theme = localStorage.getItem("copilot-api-dashboard:theme"); if (theme === "light" || theme === "dark") document.documentElement.dataset.theme = theme; } catch {}</script>
   <link rel="stylesheet" href="./styles.css">
 </head>
 <body>
@@ -12,6 +14,11 @@
   <header class="topbar">
     <div class="shell">
       <h1>Copilot API Dashboard</h1>
+      <button type="button" id="theme" class="theme-toggle" title="Auto theme (click for Light)">
+        <svg class="theme-icon-auto" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 3.5a8.5 8.5 0 0 1 0 17z"/></svg>
+        <svg class="theme-icon-light" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2.5V5M12 19v2.5M2.5 12H5M19 12h2.5M5.28 5.28l1.77 1.77M16.95 16.95l1.77 1.77M5.28 18.72l1.77-1.77M16.95 7.05l1.77-1.77"/></svg>
+        <svg class="theme-icon-dark" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.4 13.31A8.5 8.5 0 1 1 10.69 3.6 7 7 0 0 0 20.4 13.31z"/></svg>
+      </button>
     </div>
   </header>
   <main class="shell">

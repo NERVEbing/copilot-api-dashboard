@@ -3,7 +3,9 @@ const { readFileSync } = require("node:fs");
 const { test } = require("node:test");
 const vm = require("node:vm");
 
-function app(baseURI = "http://localhost/", fetchImpl = () => new Promise(() => {})) {
+const headScript = readFileSync(`${__dirname}/index.html`, "utf8").match(/<script>([\s\S]*?)<\/script>/)[1];
+
+function app(baseURI = "http://localhost/", fetchImpl = () => new Promise(() => {}), storage = new Map()) {
   const elements = new Map();
   const node = (properties = {}) => {
     const listeners = new Map(), attributes = new Map();
@@ -55,7 +57,7 @@ function app(baseURI = "http://localhost/", fetchImpl = () => new Promise(() => 
     accountTable.scrollLeft = 0;
   } });
   const document = node({
-    baseURI, getElementById: element, activeElement: null,
+    baseURI, getElementById: element, activeElement: null, documentElement: { dataset: {} },
     querySelector(selector) { return selector === '[data-table="accounts"]' ? accountTable : null; },
   });
   const location = new URL(baseURI);
@@ -70,7 +72,9 @@ function app(baseURI = "http://localhost/", fetchImpl = () => new Promise(() => 
     Option: class { constructor(text, value) { this.text = text; this.value = value; } },
     AbortController, URL, URLSearchParams, Intl,
     fetch: fetchImpl,
+    localStorage: { getItem: (key) => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, String(value)), removeItem: (key) => storage.delete(key) },
   });
+  vm.runInContext(headScript, context);
   vm.runInContext(readFileSync(`${__dirname}/app.js`, "utf8"), context);
   return { run: (code) => vm.runInContext(code, context), element, document, accountTable, chart: { plot, svg, hitArea, guide, active, tooltip }, location, historyCalls, popstate: () => windowListeners.get("popstate")() };
 }
@@ -714,4 +718,33 @@ test("an empty account list explains discovery unless data sources failed", () =
   assert.ok(element("accounts").innerHTML.includes("Add endpoints to the endpoints file"));
   run("state.dashboardErrors = [{target:'a',operation:'usage',message:'x'}]; renderDashboard({accounts:[]})");
   assert.ok(element("accounts").innerHTML.includes("No accounts available."));
+});
+
+test("theme button cycles auto, light, and dark, and the head script restores the choice on reload", () => {
+  const storage = new Map([["copilot-api-dashboard:theme", "sepia"]]);
+  const first = app(undefined, undefined, storage);
+  const theme = () => first.document.documentElement.dataset.theme;
+  assert.equal(theme(), undefined);
+  assert.equal(first.element("theme").title, "Auto theme (click for Light)");
+  first.element("theme").dispatch("click");
+  assert.equal(theme(), "light");
+  first.element("theme").dispatch("click");
+  assert.equal(theme(), "dark");
+  assert.equal(first.element("theme").title, "Dark theme (click for Auto)");
+  assert.equal(first.element("announcement").textContent, "Dark theme.");
+  const reloaded = app(undefined, undefined, storage);
+  assert.equal(reloaded.document.documentElement.dataset.theme, "dark");
+  assert.equal(reloaded.element("theme").title, "Dark theme (click for Auto)");
+  reloaded.element("theme").dispatch("click");
+  assert.equal(reloaded.document.documentElement.dataset.theme, undefined);
+  assert.equal(reloaded.element("theme").title, "Auto theme (click for Light)");
+  assert.equal(storage.size, 0);
+});
+
+test("theme changes still apply when browser storage is unavailable", () => {
+  const blocked = { get() { throw new Error("blocked"); }, set() { throw new Error("blocked"); }, delete() { throw new Error("blocked"); } };
+  const { element, document } = app(undefined, undefined, blocked);
+  assert.equal(element("theme").title, "Auto theme (click for Light)");
+  element("theme").dispatch("click");
+  assert.equal(document.documentElement.dataset.theme, "light");
 });
