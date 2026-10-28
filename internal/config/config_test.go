@@ -67,3 +67,30 @@ func TestParsePrefersLocalEndpointsFile(t *testing.T) {
 		t.Fatalf("explicit endpoints: %+v %v", c, err)
 	}
 }
+
+func TestParseFindsLocalAccountAliasesFile(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "config"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "config", "account-aliases.yaml"), []byte("aliases: {}\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(dir)
+
+	for _, tc := range []struct {
+		name, want string
+		set        bool
+	}{
+		{name: "local", want: "config/account-aliases.yaml"},
+		{name: "explicit", want: "/custom/account-aliases.yaml", set: true},
+		{name: "disabled", want: "", set: true},
+	} {
+		c, err := Parse(func(key string) (string, bool) {
+			return tc.want, tc.set && key == "COPILOT_API_DASHBOARD_ACCOUNT_ALIASES_FILE"
+		})
+		if err != nil || c.AccountAliasesFile != tc.want {
+			t.Fatalf("%s account aliases: %+v %v", tc.name, c, err)
+		}
+	}
+}

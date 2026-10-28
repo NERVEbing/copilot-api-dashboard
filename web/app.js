@@ -9,12 +9,16 @@ function tokens(value) {
   return numeric(value) ? escapeHTML(compact.format(value)) : "—";
 }
 const empty = (message = "—") => `<p class="empty">${escapeHTML(message)}</p>`;
-const state = { account: "", period: "last_30_days", page: 1, totalPages: 1, dashboardErrors: [], eventErrors: [], showAccountNames: false };
+const periods = ["today", "this_week", "last_7_days", "this_month", "last_30_days", "lifetime"];
+const defaultPeriod = "last_30_days";
+const timeZone = new Intl.DateTimeFormat().resolvedOptions().timeZone;
+const state = { account: "", period: defaultPeriod, page: 1, totalPages: 1, dashboardErrors: [], eventErrors: [], showAccountNames: false };
 let dashboardController;
 let eventsController;
 let refreshID = 0;
 let chartDays = null;
 let hasAccountAliases = false;
+let shownEvents = "";
 const tableViews = new Map();
 const sorts = { accounts: { column: 3, direction: -1 }, models: { column: 6, direction: -1 }, days: { column: 0, direction: 1 } };
 
@@ -38,8 +42,8 @@ function duration(value) {
 function requestOutcome(value) {
   switch (value) {
     case "completed": return "Completed";
-    case "cancelled": return "Cancelled";
-    case "error": return "Error";
+    case "cancelled": return '<span class="outcome outcome-cancelled">Cancelled</span>';
+    case "error": return '<span class="outcome outcome-error">Error</span>';
     default: return "—";
   }
 }
@@ -49,7 +53,8 @@ function money(costs) {
   return costs.map((cost) => {
     if (!numeric(cost.total_cost_nanos)) return "—";
     const amount = cost.total_cost_nanos / 1e9;
-    const display = amount > 0 && amount < 0.01 ? "<0.01" : amount.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const subcent = amount > 0 && amount < 0.01;
+    const display = subcent && amount < 0.000001 ? "<0.000001" : amount.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: subcent ? 6 : 2 });
     return `<span class="money">${escapeHTML(`${cost.currency} ${display}`)}</span>`;
   }).join("");
 }
@@ -64,7 +69,7 @@ function headerCell(label, index, sortID, disabledCost, className = "", attribut
 
 function table(label, headers, rows, sortID, disabledCost = false) {
   const cells = headers.map((header, index) => headerCell(header, index, sortID, disabledCost, index && !["Model", "Plan", "Endpoint", "Outcome", "Target", "Operation", "Error"].includes(header) ? "number" : "", header === "Outcome" ? ' title="HTTP/body completion. Completed does not certify model success."' : "")).join("");
-  return `<div class="table-scroll"${sortID ? ` data-table="${sortID}"` : ""} tabindex="0" role="region" aria-label="${escapeHTML(label)}"><table><caption class="sr-only">${escapeHTML(label)}</caption><thead><tr>${cells}</tr></thead><tbody>${rows.join("")}</tbody></table></div>`;
+  return `<div class="table-scroll"${sortID ? ` data-table="${sortID}"` : ""} tabindex="0" role="region" aria-label="${escapeHTML(`${label} table`)}"><table><caption class="sr-only">${escapeHTML(label)}</caption><thead><tr>${cells}</tr></thead><tbody>${rows.join("")}</tbody></table></div>`;
 }
 
 function sortableTable(id, label, headers, items, getters, renderRow, costs) {
@@ -144,6 +149,11 @@ function quotaTotal(quota) {
   return validMeteredQuota(quota) ? number(quota.entitlement) : "—";
 }
 
+function usageLevel(usedPercent) {
+  const rounded = Math.round(usedPercent * 10) / 10;
+  return rounded >= 100 ? "exhausted" : rounded >= 90 ? "warning" : "";
+}
+
 function quotaUsage(quota) {
   if (quota?.unlimited === true) return '<span class="unlimited">Unlimited</span>';
   const usedPercent = usedPercentValue(quota);
@@ -151,17 +161,20 @@ function quotaUsage(quota) {
   const rounded = Math.round(usedPercent * 10) / 10;
   const display = `${percent(rounded)}%`;
   const progress = Math.min(100, Math.max(0, rounded));
-  return `<span class="quota-usage${rounded >= 100 ? " exhausted" : ""}"><progress value="${progress}" max="100" aria-label="${display} used"></progress><span class="quota-usage-value">${display}</span></span>`;
+  const level = usageLevel(rounded);
+  return `<span class="quota-usage${level ? ` ${level}` : ""}"><progress value="${progress}" max="100" aria-label="${display} used"></progress><span class="quota-usage-value">${display}</span></span>`;
 }
 
 function renderQuotas(account) {
-  $("quotas").innerHTML = [["chat", "Chat"], ["completions", "Completions"], ["premium_interactions", "Premium interactions"]].map(([key, label]) => {
+  $("quotas").innerHTML = [["premium_interactions", "Premium interactions"], ["chat", "Chat"], ["completions", "Completions"]].map(([key, label]) => {
     const q = account?.quota_snapshots?.[key];
-    const unlimited = q?.unlimited === true;
+    if (q?.unlimited === true) {
+      return `<article class="quota"><div class="quota-top"><h3>${label}</h3><span class="unlimited">Unlimited</span></div>${numeric(usedValue(q)) ? `<div class="quota-values"><span>${quotaUsed(q)} used</span></div>` : ""}</article>`;
+    }
     const usedPercent = usedPercentValue(q);
-    const progress = unlimited ? 100 : numeric(usedPercent) ? Math.min(100, Math.max(0, usedPercent)) : null;
-    return `<article class="quota"><div class="quota-top"><h3>${label}</h3><span class="${unlimited ? "unlimited" : "muted"}">${unlimited ? "Unlimited" : numeric(usedPercent) ? `${percent(usedPercent)}% used` : "—"}</span></div>
-      ${progress === null ? empty() : `<progress value="${progress}" max="100" aria-label="${label}: ${unlimited ? "unlimited" : `${percent(usedPercent)}% used`}"></progress>`}
+    const level = numeric(usedPercent) ? usageLevel(usedPercent) : "";
+    return `<article class="quota"><div class="quota-top"><h3>${label}</h3><span class="${level || "muted"}">${numeric(usedPercent) ? `${percent(usedPercent)}% used` : "—"}</span></div>
+      ${numeric(usedPercent) ? `<progress${level ? ` class="${level}"` : ""} value="${Math.min(100, Math.max(0, usedPercent))}" max="100" aria-label="${label}: ${percent(usedPercent)}% used"></progress>` : empty()}
       <div class="quota-values"><span>${quotaUsed(q)} used / ${quotaTotal(q)}</span><span>${quotaRemaining(q)} remaining</span></div></article>`;
   }).join("");
 }
@@ -301,7 +314,10 @@ function renderModels(models) {
 
 function renderAccounts(accounts) {
   hasAccountAliases = accounts.some((a) => a.display_name);
-  if (!accounts.length) { $("accounts").innerHTML = empty("No accounts available."); return; }
+  if (!accounts.length) {
+    $("accounts").innerHTML = empty(state.dashboardErrors.length ? "No accounts available." : "No accounts found. Add endpoints to the endpoints file, or run Copilot API containers on a Docker network shared with the dashboard.");
+    return;
+  }
   const names = accounts.map((a) => a.display_name || a.login), counts = new Map();
   for (const name of names) counts.set(name, (counts.get(name) ?? 0) + 1);
   const labels = new Map(accounts.map((a, i) => [a.login, a.display_name && counts.get(names[i]) > 1 ? `${names[i]} (${a.login})` : names[i]]));
@@ -314,7 +330,9 @@ function renderAccounts(accounts) {
 function renderErrors() {
   const unique = new Map([...state.dashboardErrors, ...state.eventErrors].map((e) => [JSON.stringify([e.target, e.operation, e.message]), e]));
   $("errors-section").hidden = unique.size === 0;
-  $("errors").innerHTML = unique.size ? table("Failed requests", ["Target", "Operation", "Error"], [...unique.values()].map((e) => `<tr><td>${escapeHTML(e.target)}</td><td>${escapeHTML(e.operation)}</td><td>${escapeHTML(e.message)}</td></tr>`)) : "";
+  $("errors-alert").hidden = unique.size === 0;
+  $("errors-alert").innerHTML = unique.size ? `<span>${number(unique.size)} data source ${unique.size === 1 ? "error" : "errors"}.</span> <a href="#errors-section">View details</a>` : "";
+  $("errors").innerHTML = unique.size ? table("Data source errors", ["Target", "Operation", "Error"], [...unique.values()].map((e) => `<tr><td>${escapeHTML(e.target)}</td><td>${escapeHTML(e.operation)}</td><td>${escapeHTML(e.message)}</td></tr>`)) : "";
 }
 
 function updateAccounts(accounts) {
@@ -343,7 +361,9 @@ function renderDashboard(data) {
 }
 
 function resetEvents(message) {
+  shownEvents = "";
   $("events").innerHTML = empty(message);
+  $("events").setAttribute("aria-busy", "false");
   $("events-count").textContent = "";
   $("page-label").textContent = "";
   $("previous").disabled = true;
@@ -352,9 +372,10 @@ function resetEvents(message) {
 
 function renderEvents(data) {
   if (!data) { resetEvents(); return; }
+  shownEvents = JSON.stringify([state.account, state.period]);
   state.page = data.page;
   state.totalPages = data.total_pages;
-  $("events-count").textContent = `${number(data.total)} requests`;
+  $("events-count").textContent = `${number(data.total)} requests${timeZone ? ` · Times in ${timeZone}` : ""}`;
   $("page-label").textContent = `Page ${number(data.page)} of ${number(data.total_pages)}`;
   $("previous").disabled = data.page <= 1;
   $("next").disabled = data.page >= data.total_pages;
@@ -391,9 +412,6 @@ async function loadEvents() {
   const controller = new AbortController();
   eventsController = controller;
   const id = refreshID;
-  state.eventErrors = [];
-  renderErrors();
-  resetEvents("Loading events…");
   $("events").setAttribute("aria-busy", "true");
   try {
     const result = await request("api/v1/events", new URLSearchParams({ account: state.account, period: state.period, page: state.page, page_size: 20 }), controller.signal);
@@ -409,6 +427,11 @@ async function loadEvents() {
   }
 }
 
+function setSyncing(syncing) {
+  $("refresh").textContent = syncing ? "Syncing…" : "Refresh";
+  $("refresh").setAttribute("aria-disabled", String(syncing));
+}
+
 async function refresh(sync = false) {
   dashboardController?.abort();
   eventsController?.abort();
@@ -416,21 +439,12 @@ async function refresh(sync = false) {
   dashboardController = controller;
   const id = ++refreshID;
   state.page = 1;
-  state.dashboardErrors = [];
-  state.eventErrors = [];
-  renderErrors();
   $("content").setAttribute("aria-busy", "true");
+  $("events").setAttribute("aria-busy", "true");
+  $("previous").disabled = true;
+  $("next").disabled = true;
+  setSyncing(sync);
   $("announcement").textContent = sync ? "Syncing usage…" : "Loading usage…";
-  $("identity").hidden = true;
-  chartDays = null;
-  tableViews.clear();
-  $("trend-section").hidden = state.period === "today";
-  $("quotas").hidden = true;
-  $("accounts-section").hidden = Boolean(state.account);
-  for (const [element, message] of [["metrics", "Loading usage…"], ["trend", "Loading daily usage…"], ["models", "Loading models…"], ["accounts", "Loading accounts…"]]) $(element).innerHTML = empty(message);
-  $("events-section").hidden = !state.account;
-  $("events").setAttribute("aria-busy", "false");
-  resetEvents("Loading events…");
   const query = new URLSearchParams({ period: state.period });
   if (state.account) query.set("account", state.account);
   try {
@@ -445,20 +459,86 @@ async function refresh(sync = false) {
     const result = await request("api/v1/dashboard", query, controller.signal);
     if (id !== refreshID || controller.signal.aborted) return;
     state.dashboardErrors = [...syncErrors, ...result.errors];
+    state.eventErrors = [];
+    tableViews.clear();
     const found = renderDashboard(result.data);
+    const urlAccount = new URLSearchParams(location.search).get("account");
+    if (urlAccount && urlAccount !== state.account && urlAccount.toLowerCase() === state.account.toLowerCase()) {
+      const url = new URL(location.href);
+      url.searchParams.set("account", state.account);
+      history.replaceState(null, "", url.href);
+    }
     renderErrors();
-    $("announcement").textContent = state.dashboardErrors.length ? "Usage loaded with failed requests listed below." : "Usage loaded.";
+    $("announcement").textContent = state.dashboardErrors.length ? "Usage loaded with data source errors listed below." : "Usage loaded.";
+    if (state.account && shownEvents !== JSON.stringify([state.account, state.period])) resetEvents("Loading events…");
+    $("events-section").hidden = !state.account;
     if (state.account && found) void loadEvents(); else resetEvents();
   } catch (error) {
     if (!controller.signal.aborted) throw error;
   } finally {
-    if (id === refreshID && !controller.signal.aborted) $("content").setAttribute("aria-busy", "false");
+    if (id === refreshID && !controller.signal.aborted) {
+      $("content").setAttribute("aria-busy", "false");
+      setSyncing(false);
+    }
   }
 }
 
-$("controls").addEventListener("submit", (event) => { event.preventDefault(); void refresh(true); });
-$("account").addEventListener("change", () => { state.account = $("account").value; void refresh(); });
-$("period").addEventListener("change", () => { state.period = $("period").value; void refresh(); });
+function filterQuery(account, period) {
+  const query = new URLSearchParams();
+  if (account) query.set("account", account);
+  if (period !== defaultPeriod) query.set("period", period);
+  return query;
+}
+
+function filterURL() {
+  const url = new URL(location.href);
+  url.search = filterQuery(state.account, state.period).toString();
+  url.hash = "";
+  return url.href;
+}
+
+function selectAccountOption(login) {
+  const select = $("account");
+  if (login && ![...select.options].some((option) => option.value === login)) select.add(new Option(login, login));
+  select.value = login;
+}
+
+function locationFilters() {
+  const query = new URLSearchParams(location.search);
+  const period = query.get("period") ?? defaultPeriod;
+  return { account: query.get("account") ?? "", period: periods.includes(period) ? period : defaultPeriod, validPeriod: periods.includes(period) };
+}
+
+function readLocation() {
+  const filters = locationFilters();
+  state.account = filters.account;
+  state.period = filters.period;
+  selectAccountOption(state.account);
+  $("period").value = state.period;
+  return filters.validPeriod;
+}
+
+function selectFilters(account, period) {
+  state.account = account;
+  state.period = period;
+  selectAccountOption(account);
+  $("period").value = period;
+  history.pushState(null, "", filterURL());
+  void refresh();
+}
+
+$("controls").addEventListener("submit", (event) => {
+  event.preventDefault();
+  if ($("refresh").getAttribute("aria-disabled") !== "true") void refresh(true);
+});
+$("account").addEventListener("change", () => selectFilters($("account").value, state.period));
+$("period").addEventListener("change", () => selectFilters(state.account, $("period").value));
+window.addEventListener("popstate", () => {
+  const { account, period } = locationFilters();
+  if (account.toLowerCase() === state.account.toLowerCase() && period === state.period) return;
+  readLocation();
+  void refresh();
+});
 $("previous").addEventListener("click", () => { if (state.page > 1) { state.page--; void loadEvents(); } });
 $("next").addEventListener("click", () => { if (state.page < state.totalPages) { state.page++; void loadEvents(); } });
 document.addEventListener("keydown", (event) => {
@@ -483,4 +563,5 @@ new ResizeObserver(([entry]) => {
   const width = Math.round(entry.contentRect.width);
   if (width !== chartWidth) { chartWidth = width; if (chartDays) renderTrend(chartDays); }
 }).observe($("trend"));
+if (!readLocation()) history.replaceState(null, "", filterURL());
 void refresh();

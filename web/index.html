@@ -24,6 +24,7 @@
       </select></div>
       <button class="primary" type="submit" id="refresh">Refresh</button>
     </form>
+    <div id="errors-alert" class="alert" hidden></div>
     <p id="announcement" class="sr-only" role="status" aria-live="polite"></p>
     <div id="content" tabindex="-1" aria-busy="true">
       <section id="identity" aria-label="Account details" hidden></section>
@@ -38,7 +39,7 @@
       <div id="events" aria-busy="false"></div>
       <nav class="pagination" aria-label="Event pagination"><span id="page-label" aria-live="polite"></span><div><button type="button" id="previous" disabled>Previous</button><button type="button" id="next" disabled>Next</button></div></nav>
     </section>
-    <section id="errors-section" class="panel errors" aria-labelledby="errors-title" hidden><div class="panel-header"><h2 id="errors-title">Failed requests</h2></div><div id="errors"></div></section>
+    <section id="errors-section" class="panel errors" aria-labelledby="errors-title" hidden><div class="panel-header"><h2 id="errors-title">Data source errors</h2></div><div id="errors"></div></section>
     <noscript><p class="empty">Enable JavaScript to view usage.</p></noscript>
   </main>
   <script type="module" src="./app.js"></script>

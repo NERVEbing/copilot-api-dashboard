@@ -36,9 +36,10 @@ function app(baseURI = "http://localhost/", fetchImpl = () => new Promise(() => 
   });
   const element = (id) => {
     if (!elements.has(id)) elements.set(id, node({
-      innerHTML: "", textContent: "", hidden: false, clientWidth: 800,
+      innerHTML: "", textContent: "", hidden: false, clientWidth: 800, options: [],
       classList: { toggle() {} }, querySelector(selector) { return id === "trend" && selector === ".chart-plot" && this.innerHTML.includes('class="chart-plot"') ? plot : null; },
       replaceChildren(...options) { this.options = options; },
+      add(option) { this.options = [...this.options, option]; },
     }));
     return elements.get(id);
   };
@@ -57,15 +58,21 @@ function app(baseURI = "http://localhost/", fetchImpl = () => new Promise(() => 
     baseURI, getElementById: element, activeElement: null,
     querySelector(selector) { return selector === '[data-table="accounts"]' ? accountTable : null; },
   });
+  const location = new URL(baseURI);
+  const historyCalls = [];
+  const navigate = (method) => (_state, _title, url) => { historyCalls.push([method, String(url)]); location.href = new URL(url, location.href).href; };
+  const windowListeners = new Map();
   const context = vm.createContext({
-    document,
+    document, location,
+    history: { pushState: navigate("push"), replaceState: navigate("replace") },
+    window: { addEventListener(type, listener) { windowListeners.set(type, listener); } },
     ResizeObserver: class { observe() {} },
     Option: class { constructor(text, value) { this.text = text; this.value = value; } },
     AbortController, URL, URLSearchParams, Intl,
     fetch: fetchImpl,
   });
   vm.runInContext(readFileSync(`${__dirname}/app.js`, "utf8"), context);
-  return { run: (code) => vm.runInContext(code, context), element, document, accountTable, chart: { plot, svg, hitArea, guide, active, tooltip } };
+  return { run: (code) => vm.runInContext(code, context), element, document, accountTable, chart: { plot, svg, hitArea, guide, active, tooltip }, location, historyCalls, popstate: () => windowListeners.get("popstate")() };
 }
 
 test("API URLs follow the document base path", () => {
@@ -107,7 +114,9 @@ test("money formats amounts and distinguishes subcent from zero", () => {
   const { run } = app();
   const money = (value) => run(`money([{currency:'USD',total_cost_nanos:${value}}])`);
   assert.ok(money(170124278240).includes("USD 170.12"));
-  assert.ok(money(1).includes("USD &lt;0.01"));
+  assert.equal(money(3250000), '<span class="money">USD 0.00325</span>');
+  assert.equal(money(10000000), '<span class="money">USD 0.01</span>');
+  assert.ok(money(1).includes("USD &lt;0.000001"));
   assert.equal(money(0), '<span class="money">USD 0.00</span>');
   assert.equal(run("money([])"), "—");
   assert.equal(run("money(null)"), "—");
@@ -184,10 +193,13 @@ test("events show HTTP completion outcomes and retain timing through pagination"
   assert.ok(html.includes('<td class="number">1.23 s</td>'));
   assert.ok(html.includes('<td class="number">0 ms</td>'));
   assert.ok(html.includes('<td class="number">13 ms</td>'));
-  for (const value of ["Completed", "Cancelled", "Error"]) assert.ok(html.includes(`<td>${value}</td>`));
+  assert.ok(html.includes("<td>Completed</td>"));
+  assert.ok(html.includes('<td><span class="outcome outcome-cancelled">Cancelled</span></td>'));
+  assert.ok(html.includes('<td><span class="outcome outcome-error">Error</span></td>'));
   assert.equal((html.match(/<td>—<\/td><\/tr>/g) ?? []).length, 2);
   assert.ok(!html.includes("<img"));
   assert.ok(!html.includes("<td>Success</td>"));
+  assert.equal(element("events-count").textContent, `45 requests · Times in ${Intl.DateTimeFormat().resolvedOptions().timeZone}`);
   assert.equal(element("page-label").textContent, "Page 2 of 3");
   assert.equal(element("previous").disabled, false);
   assert.equal(element("next").disabled, false);
@@ -543,4 +555,163 @@ test("daily usage tooltip stays inside the plot without changing its layout", ()
   assert.ok(left >= 8 && left + chart.tooltip.offsetWidth <= 792);
   assert.ok(top >= 8 && top + chart.tooltip.offsetHeight <= 212);
   assert.equal(chart.plot.style.paddingBottom, undefined);
+});
+
+test("filters follow the page URL and browser history", async () => {
+  const calls = [];
+  const fetch = async (url) => {
+    calls.push(`${url.pathname}?${url.searchParams}`);
+    const data = url.pathname.endsWith("/dashboard") ? { accounts: [{ login: "account-a" }] } : { page: 1, total_pages: 1, total: 0, items: [] };
+    return { ok: true, status: 200, json: async () => ({ data, errors: [] }) };
+  };
+  const { element, historyCalls, location, popstate } = app("http://localhost/copilot/?account=account-a&period=last_7_days", fetch);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(calls[0], "/copilot/api/v1/dashboard?period=last_7_days&account=account-a");
+  assert.equal(element("account").value, "account-a");
+  assert.equal(element("period").value, "last_7_days");
+  assert.deepEqual(historyCalls, []);
+  element("period").value = "last_30_days";
+  element("period").dispatch("change");
+  element("account").value = "";
+  element("account").dispatch("change");
+  assert.deepEqual(historyCalls, [["push", "http://localhost/copilot/?account=account-a"], ["push", "http://localhost/copilot/"]]);
+  await new Promise((resolve) => setImmediate(resolve));
+  calls.length = 0;
+  location.href = "http://localhost/copilot/?period=today";
+  popstate();
+  location.hash = "errors-section";
+  popstate();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(calls, ["/copilot/api/v1/dashboard?period=today"]);
+  assert.equal(element("period").value, "today");
+});
+
+test("invalid URL periods fall back to the default without adding history", () => {
+  const calls = [];
+  const { element, historyCalls } = app("http://localhost/?period=yesterday&account=account-a", (url) => { calls.push(url.searchParams.get("period")); return new Promise(() => {}); });
+  assert.deepEqual(historyCalls, [["replace", "http://localhost/?account=account-a"]]);
+  assert.equal(element("period").value, "last_30_days");
+  assert.deepEqual(calls, ["last_30_days"]);
+});
+
+function controllableFetch(accounts = ["account-a"]) {
+  const pending = new Set(), calls = [];
+  const fetch = async (url, options) => {
+    const route = url.pathname.split("/").pop();
+    calls.push(`${options.method} ${route} ${url.searchParams}`);
+    if (pending.has(route)) return new Promise(() => {});
+    const data = route === "dashboard" ? { accounts: accounts.map((login) => ({ login })), totals: { total_tokens: 1234 } }
+      : route === "events" ? { page: Number(url.searchParams.get("page")), total_pages: 3, total: 45, items: [{ model: `${url.searchParams.get("account")}-p${url.searchParams.get("page")}` }] } : { synced: true };
+    return { ok: true, status: 200, json: async () => ({ data, errors: [] }) };
+  };
+  return { fetch, pending, calls };
+}
+
+test("refresh keeps the current view, locks paging, and ignores repeat syncs while loading", async () => {
+  const { fetch, pending, calls } = controllableFetch();
+  const { run, element } = app("http://localhost/?account=account-a", fetch);
+  await new Promise((resolve) => setImmediate(resolve));
+  const metrics = element("metrics").innerHTML, events = element("events").innerHTML;
+  assert.ok(events.includes("account-a-p1"));
+  pending.add("sync").add("dashboard").add("events");
+  element("controls").dispatch("submit");
+  assert.equal(element("metrics").innerHTML, metrics);
+  assert.equal(element("events").innerHTML, events);
+  assert.equal(element("content").getAttribute("aria-busy"), "true");
+  assert.equal(element("next").disabled, true);
+  assert.equal(element("refresh").textContent, "Syncing…");
+  assert.equal(element("refresh").getAttribute("aria-disabled"), "true");
+  const requests = calls.length;
+  element("controls").dispatch("submit");
+  assert.equal(calls.length, requests);
+  run("void refresh()");
+  assert.equal(element("refresh").textContent, "Refresh");
+  assert.equal(element("refresh").getAttribute("aria-disabled"), "false");
+});
+
+test("event pages keep the current table and pager while the next page loads", async () => {
+  const { fetch, pending } = controllableFetch();
+  const { run, element } = app("http://localhost/?account=account-a", fetch);
+  await new Promise((resolve) => setImmediate(resolve));
+  const events = element("events").innerHTML;
+  pending.add("events");
+  element("next").dispatch("click");
+  assert.equal(run("state.page"), 2);
+  assert.equal(element("events").innerHTML, events);
+  assert.equal(element("events").getAttribute("aria-busy"), "true");
+  assert.equal(element("next").disabled, false);
+});
+
+test("events are replaced only when the account or period changes", async () => {
+  const { fetch, pending } = controllableFetch(["account-a", "account-b"]);
+  const { element } = app("http://localhost/?account=account-a", fetch);
+  await new Promise((resolve) => setImmediate(resolve));
+  const events = element("events").innerHTML;
+  pending.add("events");
+  element("controls").dispatch("submit");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(element("events").innerHTML, events);
+  element("account").value = "account-b";
+  element("account").dispatch("change");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(element("events").innerHTML.includes("Loading events…"));
+  assert.ok(!element("events").innerHTML.includes("account-a-p1"));
+});
+
+test("account URLs adopt the canonical login so in-page links do not reload", async () => {
+  const { fetch, calls } = controllableFetch();
+  const { element, historyCalls, location, popstate } = app("http://localhost/?account=ACCOUNT-A#content", fetch);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(historyCalls, [["replace", "http://localhost/?account=account-a#content"]]);
+  calls.length = 0;
+  location.hash = "errors-section";
+  popstate();
+  location.href = "http://localhost/?account=ACCOUNT-A";
+  popstate();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(calls, []);
+  assert.deepEqual(element("account").options.map((option) => option.value), ["", "account-a"]);
+});
+
+test("quota cards lead with premium interactions, omit bars for unlimited quotas, and warn from 90%", () => {
+  const { run, element } = app();
+  run(`renderQuotas({quota_snapshots:{
+    chat:{unlimited:true}, completions:{unlimited:true},
+    premium_interactions:{unlimited:false,entitlement:300,quota_remaining:30,percent_remaining:10}
+  }})`);
+  let html = element("quotas").innerHTML;
+  assert.ok(html.indexOf("Premium interactions") < html.indexOf("Chat"));
+  assert.equal((html.match(/<progress /g) ?? []).length, 1);
+  assert.ok(html.includes('<span class="warning">90% used</span>'));
+  assert.ok(html.includes('<progress class="warning" value="90"'));
+  assert.ok(!html.includes("Unlimited remaining"));
+  run("renderQuotas({quota_snapshots:{premium_interactions:{unlimited:true,credits_used:120}}})");
+  html = element("quotas").innerHTML;
+  assert.ok(html.includes("<span>120 used</span>"));
+  assert.equal((html.match(/<progress /g) ?? []).length, 0);
+  assert.equal(run("usageLevel(89.94)"), "");
+  assert.equal(run("usageLevel(89.96)"), "warning");
+  assert.equal(run("usageLevel(100)"), "exhausted");
+  assert.ok(run("quotaUsage({unlimited:false,entitlement:100,quota_remaining:10,percent_remaining:10})").startsWith('<span class="quota-usage warning">'));
+});
+
+test("data source errors are summarized above the usage content", () => {
+  const { run, element } = app();
+  run(`state.dashboardErrors = [
+    {target:'a',operation:'usage',message:'HTTP 500'}, {target:'a',operation:'usage',message:'HTTP 500'},
+    {target:'b',operation:'token-usage',message:'timeout'}
+  ]; renderErrors()`);
+  assert.equal(element("errors-alert").hidden, false);
+  assert.equal(element("errors-alert").innerHTML, '<span>2 data source errors.</span> <a href="#errors-section">View details</a>');
+  assert.ok(element("errors").innerHTML.includes('aria-label="Data source errors table"'));
+  run("state.dashboardErrors = []; renderErrors()");
+  assert.equal(element("errors-alert").hidden, true);
+});
+
+test("an empty account list explains discovery unless data sources failed", () => {
+  const { run, element } = app();
+  run("renderDashboard({accounts:[]})");
+  assert.ok(element("accounts").innerHTML.includes("Add endpoints to the endpoints file"));
+  run("state.dashboardErrors = [{target:'a',operation:'usage',message:'x'}]; renderDashboard({accounts:[]})");
+  assert.ok(element("accounts").innerHTML.includes("No accounts available."));
 });

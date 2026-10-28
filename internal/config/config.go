@@ -34,12 +34,23 @@ func Parse(lookup func(string) (string, bool)) (Config, error) {
 		}
 		return fallback
 	}
+	isFile := func(name string) bool {
+		info, err := os.Stat(name)
+		return err == nil && !info.IsDir()
+	}
 	endpointsFile := "/config/endpoints.yaml"
-	if info, err := os.Stat("config/endpoints.yaml"); err == nil && !info.IsDir() {
+	if isFile("config/endpoints.yaml") {
 		endpointsFile = "config/endpoints.yaml"
 	}
+	aliasesFile := ""
+	for _, name := range []string{"config/account-aliases.yaml", "/config/account-aliases.yaml"} {
+		if isFile(name) {
+			aliasesFile = name
+			break
+		}
+	}
 	c := Config{ListenAddr: get("LISTEN_ADDR", ":9000"), EndpointsFile: get("ENDPOINTS_FILE", endpointsFile), DockerImage: get("DOCKER_IMAGE", "ghcr.io/caozhiyuan/copilot-api:latest")}
-	c.AccountAliasesFile = get("ACCOUNT_ALIASES_FILE", "")
+	c.AccountAliasesFile = get("ACCOUNT_ALIASES_FILE", aliasesFile)
 	_, port, err := net.SplitHostPort(c.ListenAddr)
 	n, portErr := strconv.Atoi(port)
 	if err != nil || portErr != nil || n < 1 || n > 65535 {
