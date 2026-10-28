@@ -3,7 +3,7 @@ const { readFileSync } = require("node:fs");
 const { test } = require("node:test");
 const vm = require("node:vm");
 
-const headScript = readFileSync(`${__dirname}/index.html`, "utf8").match(/<script>([\s\S]*?)<\/script>/)[1];
+const headScript = readFileSync(`${__dirname}/index.html`, "utf8").match(/<script\b[^>]*>([\s\S]*?)<\/script\b[^>]*>/i)[1];
 
 function app(baseURI = "http://localhost/", fetchImpl = () => new Promise(() => {}), storage = new Map()) {
   const elements = new Map();
