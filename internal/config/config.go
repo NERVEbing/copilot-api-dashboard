@@ -76,9 +76,12 @@ func Parse(lookup func(string) (string, bool)) (Config, error) {
 		return c, fmt.Errorf("PERSISTENCE_ENABLED must be a boolean")
 	}
 	c.DatabasePath = get("DATABASE_PATH", "/data/dashboard.sqlite")
+	if c.PersistenceEnabled && strings.TrimSpace(c.DatabasePath) == "" {
+		return c, fmt.Errorf("DATABASE_PATH must not be empty when persistence is enabled")
+	}
 	c.SyncInterval, err = time.ParseDuration(get("SYNC_INTERVAL", "10m"))
-	if c.PersistenceEnabled && (strings.TrimSpace(c.DatabasePath) == "" || err != nil || c.SyncInterval <= 0) {
-		return c, fmt.Errorf("DATABASE_PATH must not be empty and SYNC_INTERVAL must be a positive duration when persistence is enabled")
+	if err != nil || c.SyncInterval <= 0 {
+		return c, fmt.Errorf("SYNC_INTERVAL must be a positive duration")
 	}
 	if err := c.LogLevel.UnmarshalText([]byte(get("LOG_LEVEL", "info"))); err != nil {
 		return c, fmt.Errorf("invalid LOG_LEVEL")

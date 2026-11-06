@@ -65,23 +65,24 @@ func run() error {
 		background.Wait()
 		service.WaitForSync()
 	}()
-	if service.History != nil {
-		background.Go(func() {
-			ticker := time.NewTicker(cfg.SyncInterval)
-			defer ticker.Stop()
-			for {
-				failures, _ := service.Sync(ctx, "")
-				for _, failure := range failures {
-					slog.Warn("Persistence sync failed", "target", failure.Target, "operation", failure.Operation, "error", failure.Message)
-				}
-				select {
-				case <-ctx.Done():
-					return
-				case <-ticker.C:
-				}
+	background.Go(func() {
+		ticker := time.NewTicker(cfg.SyncInterval)
+		defer ticker.Stop()
+		for {
+			failures, _ := service.Sync(ctx, "")
+			if ctx.Err() != nil {
+				return
 			}
-		})
-	}
+			for _, failure := range failures {
+				slog.Warn("Sync failed", "target", failure.Target, "operation", failure.Operation, "error", failure.Message)
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+		}
+	})
 	done := make(chan error, 1)
 	go func() { done <- server.ListenAndServe() }()
 	slog.Info("Dashboard listening", "address", cfg.ListenAddr)

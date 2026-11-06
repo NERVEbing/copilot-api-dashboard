@@ -124,7 +124,7 @@ func TestPersistentSyncReturnsEmptyErrorsArray(t *testing.T) {
 
 func TestHTTPVerticalSlice(t *testing.T) {
 	fixtures := map[string][]byte{}
-	for path, name := range map[string]string{"/usage": "usage", "/token-usage": "summary", "/token-usage/daily": "daily", "/token-usage/events": "events"} {
+	for path, name := range map[string]string{"/usage": "usage", "/token-usage/daily": "daily", "/token-usage/events": "events"} {
 		b, err := os.ReadFile("../upstream/testdata/" + name + ".json")
 		if err != nil {
 			t.Fatal(err)

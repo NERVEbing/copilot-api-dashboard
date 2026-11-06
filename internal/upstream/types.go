@@ -1,6 +1,9 @@
 package upstream
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"slices"
+)
 
 type Quota struct {
 	CreditsUsed      *float64     `json:"credits_used"`
@@ -114,10 +117,9 @@ type Events struct {
 	Range      Range   `json:"range"`
 }
 
+// Periods lists the token usage periods.
+var Periods = []string{"today", "this_week", "last_7_days", "this_month", "last_30_days", "lifetime"}
+
 func ValidPeriod(p string) bool {
-	switch p {
-	case "today", "this_week", "last_7_days", "this_month", "last_30_days", "lifetime":
-		return true
-	}
-	return false
+	return slices.Contains(Periods, p)
 }

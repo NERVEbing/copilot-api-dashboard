@@ -25,7 +25,7 @@ func fixture(t *testing.T, name string) []byte {
 }
 
 func TestContractFixtures(t *testing.T) {
-	data := map[string][]byte{"/usage": fixture(t, "usage"), "/token-usage": fixture(t, "summary"), "/token-usage/daily": fixture(t, "daily"), "/token-usage/events": fixture(t, "events")}
+	data := map[string][]byte{"/usage": fixture(t, "usage"), "/token-usage/daily": fixture(t, "daily"), "/token-usage/events": fixture(t, "events")}
 	const basePath = "/copilot/account-a"
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "GET" || r.Header.Get("x-api-key") != "test-key" {
@@ -52,12 +52,8 @@ func TestContractFixtures(t *testing.T) {
 	if err != nil || u.Login != "Account-A" || !*u.Quotas.Chat.Unlimited || *u.Quotas.PremiumInteractions.Remaining != 270 || *u.Quotas.PremiumInteractions.CreditsUsed != 30 {
 		t.Fatalf("usage: %+v %v", u, err)
 	}
-	s, err := c.Summary(ctx, e, "last_30_days")
-	if err != nil || s.Totals.Tokens != 180 || s.Totals.Requests != 2 || s.Totals.NanoAIU != nil || s.Models[0].Model != "model-a" || s.Totals.Costs[0].Nanos != 123 {
-		t.Fatalf("summary: %+v %v", s, err)
-	}
 	d, err := c.Daily(ctx, e, "last_30_days")
-	if err != nil || len(d.Days) != 1 || d.Days[0].Totals.CacheRead != 20 {
+	if err != nil || d.Totals.Tokens != 180 || d.Totals.Requests != 2 || d.Totals.NanoAIU != nil || d.Models[0].Model != "model-a" || d.Totals.Costs[0].Nanos != 123 || len(d.Days) != 1 || d.Days[0].Totals.CacheRead != 20 {
 		t.Fatalf("daily: %+v %v", d, err)
 	}
 	p, err := c.Events(ctx, e, "last_30_days", 2, 1)
@@ -202,9 +198,6 @@ func TestInvalidDatasetAndNullFields(t *testing.T) {
 	c := New(time.Second, 1)
 	defer c.Close()
 	e := discovery.Endpoint{URL: srv.URL}
-	if _, err := c.Summary(context.Background(), e, "today"); err == nil {
-		t.Fatal("missing summary accepted")
-	}
 	if _, err := c.Daily(context.Background(), e, "today"); err == nil {
 		t.Fatal("missing daily accepted")
 	}

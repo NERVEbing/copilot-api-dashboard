@@ -16,7 +16,7 @@ func TestParse(t *testing.T) {
 		t.Fatalf("defaults: %+v, %v", c, err)
 	}
 	for _, tc := range []struct{ key, value string }{
-		{"LISTEN_ADDR", "bad"}, {"LISTEN_ADDR", ":0"}, {"LISTEN_ADDR", ":65536"}, {"BASE_PATH", ""}, {"BASE_PATH", "dashboard"}, {"BASE_PATH", "/dashboard//nested"}, {"BASE_PATH", "/dashboard/../admin"}, {"BASE_PATH", "/review/{bad"}, {"BASE_PATH", "/dashboard?debug=1"}, {"BASE_PATH", "/dashboard%2Fadmin"}, {"REQUEST_TIMEOUT", "0s"}, {"REQUEST_TIMEOUT", "-1s"}, {"REQUEST_TIMEOUT", "bad"}, {"MAX_CONCURRENCY", "0"}, {"MAX_CONCURRENCY", "-1"}, {"MAX_CONCURRENCY", "bad"}, {"PERSISTENCE_ENABLED", "sometimes"}, {"LOG_LEVEL", "invalid"}, {"ENDPOINTS_FILE", ""}, {"DOCKER_IMAGE", ""},
+		{"LISTEN_ADDR", "bad"}, {"LISTEN_ADDR", ":0"}, {"LISTEN_ADDR", ":65536"}, {"BASE_PATH", ""}, {"BASE_PATH", "dashboard"}, {"BASE_PATH", "/dashboard//nested"}, {"BASE_PATH", "/dashboard/../admin"}, {"BASE_PATH", "/review/{bad"}, {"BASE_PATH", "/dashboard?debug=1"}, {"BASE_PATH", "/dashboard%2Fadmin"}, {"REQUEST_TIMEOUT", "0s"}, {"REQUEST_TIMEOUT", "-1s"}, {"REQUEST_TIMEOUT", "bad"}, {"MAX_CONCURRENCY", "0"}, {"MAX_CONCURRENCY", "-1"}, {"MAX_CONCURRENCY", "bad"}, {"PERSISTENCE_ENABLED", "sometimes"}, {"SYNC_INTERVAL", "0s"}, {"SYNC_INTERVAL", "bad"}, {"LOG_LEVEL", "invalid"}, {"ENDPOINTS_FILE", ""}, {"DOCKER_IMAGE", ""},
 	} {
 		t.Run(tc.key+tc.value, func(t *testing.T) {
 			_, err := Parse(func(k string) (string, bool) { return tc.value, k == "COPILOT_API_DASHBOARD_"+tc.key })
@@ -34,8 +34,6 @@ func TestParse(t *testing.T) {
 	}
 	for _, values := range []map[string]string{
 		{"PERSISTENCE_ENABLED": "true", "DATABASE_PATH": ""},
-		{"PERSISTENCE_ENABLED": "true", "SYNC_INTERVAL": "0s"},
-		{"PERSISTENCE_ENABLED": "true", "SYNC_INTERVAL": "bad"},
 	} {
 		if _, err := Parse(func(k string) (string, bool) {
 			v, ok := values[strings.TrimPrefix(k, "COPILOT_API_DASHBOARD_")]

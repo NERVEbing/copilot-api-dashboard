@@ -89,17 +89,6 @@ func validSummary(v *Summary, period string) bool {
 	return v != nil && v.Period == period && v.Totals != nil && v.Models != nil && v.Totals.Costs != nil
 }
 
-func (c *Client) Summary(ctx context.Context, e discovery.Endpoint, period string) (*Summary, error) {
-	var v *Summary
-	if err := c.get(ctx, e, "token-usage", url.Values{"period": {period}}, &v); err != nil {
-		return nil, err
-	}
-	if !validSummary(v, period) {
-		return nil, errors.New("invalid upstream summary response")
-	}
-	return v, nil
-}
-
 func (c *Client) Daily(ctx context.Context, e discovery.Endpoint, period string) (*Daily, error) {
 	var v *Daily
 	if err := c.get(ctx, e, "token-usage/daily", url.Values{"period": {period}}, &v); err != nil {

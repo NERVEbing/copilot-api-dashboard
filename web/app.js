@@ -347,6 +347,13 @@ function updateAccounts(accounts) {
   $("account").value = state.account;
 }
 
+function updatedText(updatedAt) {
+  const date = new Date(numeric(updatedAt) ? updatedAt : NaN);
+  if (Number.isNaN(date.getTime())) return "";
+  const sameDay = date.toDateString() === new Date().toDateString();
+  return `Updated ${sameDay ? date.toLocaleTimeString("en-US") : date.toLocaleString("en-US")}`;
+}
+
 function renderDashboard(data) {
   const accounts = data?.accounts ?? [];
   updateAccounts(accounts);
@@ -355,6 +362,7 @@ function renderDashboard(data) {
   $("quotas").hidden = !state.account;
   $("accounts-section").hidden = Boolean(state.account);
   $("identity").innerHTML = state.account ? `<h2>${escapeHTML(state.account)}</h2><span class="muted">${escapeHTML(account?.copilot_plan)} · Quota resets ${escapeHTML(account?.quota_reset_date)}</span>` : "";
+  $("updated").textContent = updatedText(data?.updated_at_ms);
   if (state.account) renderQuotas(account);
   renderMetrics(data?.totals);
   renderTrend(data?.days);

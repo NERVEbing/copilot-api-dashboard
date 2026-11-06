@@ -18,10 +18,11 @@
 
 ## 当前调用边界
 
-- 客户端使用 `GET /usage`、`GET /token-usage`、`GET /token-usage/daily`、`GET /token-usage/events`，凭据头为 `x-api-key`。
+- 客户端使用 `GET /usage`、`GET /token-usage/daily`、`GET /token-usage/events`，凭据头为 `x-api-key`。`/token-usage/daily` 内嵌的 `totals` 和 `byModel` 与 `GET /token-usage` 由同一上游函数按同一区间计算，因此不再单独请求 `/token-usage`。
 - 周期、分页和必须存在的字段以客户端校验为准。特别检查 `login`、`period`、`totals`、`byModel`、`costs`、`days`、`items`。
 - 账号按 `/usage` 返回的 Copilot `login` 识别和去重。统一订阅响应 `/usage/{provider}` 不等价于账号发现响应；增加 provider 的额度展示还需要明确身份与页面维度。
-- 额度和请求事件实时读取；SQLite 保存每日 token、请求、费用及模型统计，不保存额度 Used/Usage。不要将额度展示修正误报为历史库迁移。
+- 账号、额度及非持久化模式的 token 用量来自内存快照（启动时、每个 `SYNC_INTERVAL` 和 Refresh 时刷新）。上游的账号和用量由不同请求返回，因此每轮先读用量，再用 `/usage` 确认 login，并与上一轮最后观测到的 login 比较（上一轮没有该 endpoint 的 login 时先补一次 `/usage`）；不一致时重读一次，仍不一致则标记该 endpoint 用量不可用。请求事件和持久化模式的历史同步同样在读取之后再确认 login，login 变化时不返回、不保存。SQLite 保存每日 token、请求、费用及模型统计，不保存额度 Used/Usage。不要将额度展示修正误报为历史库迁移。
+- 上游 token 用量按实例存储、不区分 GitHub 账号；`/usage` 每次请求 GitHub，上游没有低成本的当前 login 接口。
 - Docker discovery 只从容器环境变量读取 `COPILOT_API_KEY`，不会读取上游 `config.json` 的 `auth.apiKeys`。现有最小配置路径是同一规范化 URL 的 YAML endpoint 指定普通 API key，YAML 优先；不要为此自动新增配置读取机制。
 
 ## 检查重点

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -102,8 +103,6 @@ func testTarget(t *testing.T, login string, tokens int64, fail string) *target {
 		switch r.URL.Path {
 		case "/usage":
 			_ = json.NewEncoder(w).Encode(upstream.Usage{Login: login})
-		case "/token-usage":
-			_ = json.NewEncoder(w).Encode(summary)
 		case "/token-usage/daily":
 			_ = json.NewEncoder(w).Encode(upstream.Daily{Summary: summary, Days: []upstream.Day{{Date: "2026-09-08", Totals: &totals, Models: summary.Models}}})
 		case "/token-usage/events":
@@ -143,8 +142,8 @@ func TestAccountAggregationAndSelection(t *testing.T) {
 	if !found || *one.Data.SelectedAccount != "Alice" || one.Data.Totals.Tokens != 100 || len(one.Data.Accounts) != 2 || one.Data.Accounts[1].Totals != nil {
 		t.Fatalf("selection: %+v", one)
 	}
-	if b.count("/usage") != 2 || b.count("/token-usage") != 1 || b.count("/token-usage/daily") != 1 {
-		t.Fatal("selected request queried other token data")
+	if b.count("/usage") != 2 || b.count("/token-usage/daily") != len(upstream.Periods) {
+		t.Fatal("selection queried upstream instead of the snapshot")
 	}
 	events, status := s.Events(context.Background(), "alice", "today", 2, 1)
 	if status != 200 || events.Data.Page != 2 || events.Data.Items[0].Tokens != 100 || b.count("/token-usage/events") != 0 {
@@ -208,7 +207,7 @@ func TestDuplicateAccountWinner(t *testing.T) {
 	a.endpoint.Source = "docker"
 	s := serviceFor(t, a, b)
 	out, _ := s.Dashboard(context.Background(), "today", "")
-	if len(out.Data.Accounts) != 1 || out.Data.Totals.Tokens != 200 || len(out.Errors) != 0 || a.count("/token-usage") != 0 {
+	if len(out.Data.Accounts) != 1 || out.Data.Totals.Tokens != 200 || len(out.Errors) != 0 {
 		t.Fatal("YAML winner not selected")
 	}
 	a.endpoint.Source = "yaml"
@@ -224,7 +223,7 @@ func TestDuplicateAccountWinner(t *testing.T) {
 }
 
 func TestFailureIsolationAndUnavailable(t *testing.T) {
-	for _, operation := range []string{"/usage", "/token-usage", "/token-usage/daily"} {
+	for _, operation := range []string{"/usage", "/token-usage/daily"} {
 		t.Run(operation, func(t *testing.T) {
 			a, b := testTarget(t, "Alice", 100, ""), testTarget(t, "Bob", 200, operation)
 			s := serviceFor(t, a, b)
@@ -232,14 +231,7 @@ func TestFailureIsolationAndUnavailable(t *testing.T) {
 			if len(out.Errors) != 1 {
 				t.Fatalf("errors: %+v", out.Errors)
 			}
-			wantTokens, wantDaily := int64(100), int64(100)
-			if operation == "/token-usage" {
-				wantDaily = 300
-			}
-			if operation == "/token-usage/daily" {
-				wantTokens = 300
-			}
-			if out.Data.Totals.Tokens != wantTokens || out.Data.Days[0].Totals.Tokens != wantDaily {
+			if out.Data.Totals.Tokens != 100 || out.Data.Days[0].Totals.Tokens != 100 {
 				t.Fatal("healthy data lost")
 			}
 			if operation != "/usage" && len(out.Data.Accounts) != 2 {
@@ -247,15 +239,10 @@ func TestFailureIsolationAndUnavailable(t *testing.T) {
 			}
 		})
 	}
-	a := testTarget(t, "Alice", 100, "/token-usage")
-	out, _ := serviceFor(t, a).Dashboard(context.Background(), "today", "")
-	if out.Data.Totals != nil || out.Data.Models != nil || out.Data.Days == nil || out.Data.Accounts[0].Totals != nil {
-		t.Fatal("unavailable summary converted to zero")
-	}
 	b := testTarget(t, "Bob", 100, "/token-usage/daily")
-	out, _ = serviceFor(t, b).Dashboard(context.Background(), "today", "")
-	if out.Data.Days != nil || out.Data.Totals == nil {
-		t.Fatal("unavailable daily converted to empty array")
+	out, _ := serviceFor(t, b).Dashboard(context.Background(), "today", "")
+	if out.Data.Totals != nil || out.Data.Models != nil || out.Data.Days != nil || out.Data.Accounts[0].Totals != nil {
+		t.Fatal("unavailable usage converted to zero")
 	}
 	empty := serviceFor(t)
 	out, found := empty.Dashboard(context.Background(), "today", "missing")
@@ -356,7 +343,7 @@ func TestSuccessfulEmptyAndFailedRefresh(t *testing.T) {
 		switch r.URL.Path {
 		case "/usage":
 			_ = json.NewEncoder(w).Encode(upstream.Usage{Login: "empty"})
-		case "/token-usage", "/token-usage/daily":
+		case "/token-usage/daily":
 			_ = json.NewEncoder(w).Encode(upstream.Daily{Summary: upstream.Summary{Period: "today", Totals: &upstream.Totals{Costs: []upstream.Cost{}}, Models: []upstream.Model{}}, Days: []upstream.Day{}})
 		}
 	}))
@@ -369,9 +356,379 @@ func TestSuccessfulEmptyAndFailedRefresh(t *testing.T) {
 		t.Fatalf("empty successful datasets: %+v", out)
 	}
 	fail.Store(true)
+	if failures, _ := s.Sync(context.Background(), ""); len(failures) != 1 {
+		t.Fatalf("failed refresh: %+v", failures)
+	}
 	out, _ = s.Dashboard(context.Background(), "today", "")
 	if out.Data.Totals != nil || out.Data.Days != nil || len(out.Data.Accounts) != 0 || len(out.Errors) != 1 {
 		t.Fatalf("failed refresh retained data: %+v", out)
+	}
+}
+
+func TestRequestsShareAccountSnapshotUntilSync(t *testing.T) {
+	// Calls of /usage and /token-usage/daily after the first round, after events, and after a sync.
+	// Without persistence the first round confirms the login before and after its reads; later rounds
+	// start from the login confirmed last. With persistence the sync confirms the login after its read.
+	want := map[string][3][2]int{
+		"live":       {{2, 6}, {3, 6}, {4, 12}},
+		"persistent": {{1, 0}, {2, 0}, {4, 1}},
+	}
+	for _, mode := range []string{"live", "persistent"} {
+		t.Run(mode, func(t *testing.T) {
+			a := testTarget(t, "Alice", 100, "")
+			s := serviceFor(t, a)
+			if mode == "persistent" {
+				s.History = &memoryHistory{hasSnapshot: true, days: []upstream.Day{}}
+			}
+			var now atomic.Int64
+			now.Store(time.Date(2026, 9, 8, 12, 0, 0, 0, time.UTC).UnixMilli())
+			s.Now = func() time.Time { return time.UnixMilli(now.Load()) }
+			calls := func() [2]int { return [2]int{a.count("/usage"), a.count("/token-usage/daily")} }
+			first, _ := s.Dashboard(context.Background(), "today", "")
+			one, found := s.Dashboard(context.Background(), "lifetime", "alice")
+			if got := calls(); !found || got != want[mode][0] || first.Data.UpdatedAtMS == nil || *first.Data.UpdatedAtMS != now.Load() || one.Data.UpdatedAtMS == nil || *one.Data.UpdatedAtMS != now.Load() {
+				t.Fatalf("dashboards did not share one round: calls=%v first=%+v one=%+v", got, first.Data, one.Data)
+			}
+			if mode == "live" && (first.Data.Totals.Tokens != 100 || one.Data.Totals.Tokens != 100) {
+				t.Fatalf("usage not served from the round: first=%+v one=%+v", first.Data.Totals, one.Data.Totals)
+			}
+			if _, status := s.Events(context.Background(), "Alice", "today", 2, 1); status != 200 || calls() != want[mode][1] {
+				t.Fatalf("events did not confirm the account without a new round: status=%d calls=%v", status, calls())
+			}
+			now.Add(time.Minute.Milliseconds())
+			if failures, found := s.Sync(context.Background(), ""); !found || len(failures) != 0 {
+				t.Fatalf("sync: %+v", failures)
+			}
+			out, _ := s.Dashboard(context.Background(), "today", "")
+			if got := calls(); got != want[mode][2] || out.Data.UpdatedAtMS == nil || *out.Data.UpdatedAtMS != now.Load() {
+				t.Fatalf("sync did not take a new round: calls=%v data=%+v", got, out.Data)
+			}
+		})
+	}
+}
+
+func TestCanceledRequestDoesNotCancelOrReplaceSharedSnapshot(t *testing.T) {
+	started, release := make(chan struct{}), make(chan struct{})
+	var usageCalls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/usage":
+			if usageCalls.Add(1) == 1 {
+				close(started)
+				<-release
+			}
+			_ = json.NewEncoder(w).Encode(upstream.Usage{Login: "Alice"})
+		case "/token-usage/daily":
+			_ = json.NewEncoder(w).Encode(upstream.Daily{Summary: upstream.Summary{Period: "today", Totals: &upstream.Totals{Costs: []upstream.Cost{}}, Models: []upstream.Model{}}, Days: []upstream.Day{}})
+		}
+	}))
+	t.Cleanup(srv.Close)
+	c := upstream.New(5*time.Second, 2)
+	t.Cleanup(c.Close)
+	s := &Service{Discovery: staticDiscovery{{Name: "alice", URL: srv.URL, Source: "yaml"}}, Upstream: c}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	canceled, waiting := make(chan Response, 1), make(chan Response, 1)
+	go func() {
+		out, _ := s.Dashboard(ctx, "today", "")
+		canceled <- out
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("snapshot refresh did not start")
+	}
+	go func() {
+		out, _ := s.Dashboard(context.Background(), "today", "")
+		waiting <- out
+	}()
+	time.Sleep(10 * time.Millisecond)
+	cancel()
+	select {
+	case out := <-canceled:
+		if len(out.Data.Accounts) != 0 || len(out.Errors) != 1 || out.Errors[0].Message != "request canceled" {
+			t.Fatalf("canceled request: %+v", out)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("canceled request did not return")
+	}
+	close(release)
+	var shared Response
+	select {
+	case shared = <-waiting:
+	case <-time.After(time.Second):
+		t.Fatal("waiting request did not receive the shared snapshot")
+	}
+	stored, _ := s.Dashboard(context.Background(), "today", "")
+	// The round confirms the login before and after its reads, so it calls /usage twice.
+	for _, out := range []Response{shared, stored} {
+		if len(out.Errors) != 0 || len(out.Data.Accounts) != 1 || usageCalls.Load() != 2 {
+			t.Fatalf("shared snapshot was canceled or replaced: usage=%d out=%+v", usageCalls.Load(), out)
+		}
+	}
+}
+
+// accountEndpoint serves usage that belongs to whichever account login holds when a request arrives.
+// onUsage, when set, runs before /usage responds; returning false fails the request.
+func accountEndpoint(t *testing.T, name string, login *atomic.Value, onUsage func() bool) discovery.Endpoint {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		current := login.Load().(string)
+		tokens := map[string]int64{"Alice": 100, "Bob": 200}[current]
+		period := r.URL.Query().Get("period")
+		totals := upstream.Totals{Tokens: tokens, Costs: []upstream.Cost{}}
+		summary := upstream.Summary{Period: period, Totals: &totals, Models: []upstream.Model{}}
+		switch r.URL.Path {
+		case "/usage":
+			if onUsage != nil && !onUsage() {
+				w.WriteHeader(http.StatusBadGateway)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(upstream.Usage{Login: current})
+		case "/token-usage/daily":
+			_ = json.NewEncoder(w).Encode(upstream.Daily{Summary: summary, Days: []upstream.Day{}})
+		case "/token-usage/events":
+			_ = json.NewEncoder(w).Encode(upstream.Events{Items: []upstream.Event{{ID: 1, UserID: current, Tokens: tokens}}, Period: period, Page: 1, PageSize: 20, Total: 1, TotalPages: 1})
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return discovery.Endpoint{Name: name, URL: srv.URL, Source: "yaml"}
+}
+
+func TestEndpointAccountChangeIsNotAttributedToPreviousLogin(t *testing.T) {
+	for _, mode := range []string{"live", "persistent"} {
+		t.Run(mode, func(t *testing.T) {
+			var login atomic.Value
+			login.Store("Alice")
+			c := upstream.New(time.Second, 4)
+			t.Cleanup(c.Close)
+			s := &Service{Discovery: staticDiscovery{accountEndpoint(t, "e", &login, nil)}, Upstream: c}
+			if mode == "persistent" {
+				s.History = &memoryHistory{hasSnapshot: true, days: []upstream.Day{}}
+			}
+			_, _ = s.Dashboard(context.Background(), "today", "")
+			login.Store("Bob")
+			stored, found := s.Dashboard(context.Background(), "today", "Alice")
+			if !found || (mode == "live" && (stored.Data.Totals == nil || stored.Data.Totals.Tokens != 100)) {
+				t.Fatalf("usage reported after the change was attributed to the previous login: %+v", stored.Data.Totals)
+			}
+			if events, status := s.Events(context.Background(), "Alice", "today", 1, 20); status != 404 || events.Data != nil {
+				t.Fatalf("events of the new account were attributed to the previous login: %d %+v", status, events.Data)
+			}
+			out, found := s.Dashboard(context.Background(), "today", "Bob")
+			if !found || len(out.Data.Accounts) != 1 || (mode == "live" && (out.Data.Totals == nil || out.Data.Totals.Tokens != 200)) {
+				t.Fatalf("snapshot was not replaced after the change: %+v", out.Data)
+			}
+		})
+	}
+}
+
+func TestEventsFollowMovedAccountAndRequireConfirmation(t *testing.T) {
+	var first, second atomic.Value
+	first.Store("Alice")
+	second.Store("Bob")
+	var confirm atomic.Bool
+	confirm.Store(true)
+	c := upstream.New(time.Second, 4)
+	t.Cleanup(c.Close)
+	s := &Service{Discovery: staticDiscovery{accountEndpoint(t, "e1", &first, confirm.Load), accountEndpoint(t, "e2", &second, nil)}, Upstream: c}
+	_, _ = s.Dashboard(context.Background(), "today", "")
+	first.Store("Bob")
+	second.Store("Alice")
+	events, status := s.Events(context.Background(), "Alice", "today", 1, 20)
+	if status != 200 || events.Data.Items[0].UserID != "Alice" {
+		t.Fatalf("events did not follow the moved account: %d %+v", status, events)
+	}
+	confirm.Store(false)
+	events, status = s.Events(context.Background(), "Bob", "today", 1, 20)
+	if status != 502 || events.Data != nil || len(events.Errors) != 1 || events.Errors[0].Operation != "usage" {
+		t.Fatalf("events were returned for an unconfirmed account: %d %+v", status, events)
+	}
+}
+
+func TestAccountChangeDuringRunningRoundTakesNewerRound(t *testing.T) {
+	var login atomic.Value
+	login.Store("Alice")
+	var armed atomic.Bool
+	var confirmations atomic.Int32
+	started, release := make(chan struct{}), make(chan struct{})
+	hold := func() bool {
+		if armed.CompareAndSwap(true, false) {
+			close(started)
+			<-release
+			return true
+		}
+		confirmations.Add(1)
+		return true
+	}
+	c := upstream.New(5*time.Second, 4)
+	t.Cleanup(c.Close)
+	s := &Service{Discovery: staticDiscovery{accountEndpoint(t, "e", &login, hold)}, Upstream: c}
+	_, _ = s.Dashboard(context.Background(), "today", "")
+	// Hold the next round's confirmation, which reads the login before the change.
+	armed.Store(true)
+	synced := make(chan struct{})
+	go func() {
+		defer close(synced)
+		_, _ = s.Sync(context.Background(), "")
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("round did not start")
+	}
+	login.Store("Bob")
+	before := confirmations.Load()
+	result := make(chan int, 1)
+	go func() {
+		_, status := s.Events(context.Background(), "Alice", "today", 1, 20)
+		result <- status
+	}()
+	for deadline := time.Now().Add(time.Second); confirmations.Load() == before; time.Sleep(time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("events did not confirm the account")
+		}
+	}
+	// Let the events request join the running round, which saw the account before the change.
+	time.Sleep(20 * time.Millisecond)
+	close(release)
+	select {
+	case status := <-result:
+		if status != 404 {
+			t.Fatalf("events used a round that predates the account change: status=%d", status)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("events did not return")
+	}
+	<-synced
+}
+
+func TestAccountChangeDuringReadsIsNotAttributed(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		switches []string // logins that the endpoint takes after each later batch of token reads
+		want     string
+		tokens   int64 // tokens of the listed account, or -1 when its usage is unavailable
+	}{
+		{name: "once", switches: []string{"Bob"}, want: "Bob", tokens: 200},
+		{name: "twice", switches: []string{"Bob", "Carol"}, want: "Carol", tokens: -1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var login atomic.Value
+			login.Store("Alice")
+			var mu sync.Mutex
+			var pending []string
+			served := 0
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/usage":
+					_ = json.NewEncoder(w).Encode(upstream.Usage{Login: login.Load().(string)})
+				case "/token-usage/daily":
+					tokens := map[string]int64{"Alice": 100, "Bob": 200, "Carol": 300}[login.Load().(string)]
+					totals := upstream.Totals{Tokens: tokens, Costs: []upstream.Cost{}}
+					_ = json.NewEncoder(w).Encode(upstream.Daily{Summary: upstream.Summary{Period: r.URL.Query().Get("period"), Totals: &totals, Models: []upstream.Model{}}, Days: []upstream.Day{}})
+					mu.Lock()
+					defer mu.Unlock()
+					if served++; served%len(upstream.Periods) == 0 && len(pending) > 0 {
+						login.Store(pending[0])
+						pending = pending[1:]
+					}
+				}
+			}))
+			t.Cleanup(srv.Close)
+			c := upstream.New(time.Second, 16)
+			t.Cleanup(c.Close)
+			s := &Service{Discovery: staticDiscovery{{Name: "e", URL: srv.URL, Source: "yaml"}}, Upstream: c}
+			_, _ = s.Dashboard(context.Background(), "today", "")
+			mu.Lock()
+			pending = tc.switches
+			mu.Unlock()
+			failures, _ := s.Sync(context.Background(), "")
+			out, _ := s.Dashboard(context.Background(), "today", "")
+			if len(out.Data.Accounts) != 1 || out.Data.Accounts[0].Login != tc.want {
+				t.Fatalf("listed accounts: %+v", out.Data.Accounts)
+			}
+			if totals := out.Data.Accounts[0].Totals; tc.tokens < 0 {
+				changed := discovery.Failure{Target: "e", Operation: "token-usage/daily", Message: errAccountChanged.Error()}
+				if totals != nil || !slices.Contains(out.Errors, changed) || !slices.Contains(failures, changed) {
+					t.Fatalf("usage read across account changes was kept: totals=%+v errors=%+v failures=%+v", totals, out.Errors, failures)
+				}
+			} else if totals == nil || totals.Tokens != tc.tokens || len(out.Errors) != 0 || len(failures) != 0 {
+				t.Fatalf("usage of %s: totals=%+v errors=%+v failures=%+v", tc.want, totals, out.Errors, failures)
+			}
+		})
+	}
+}
+
+func TestSyncReportsTokenUsageFailuresOfSelectedAccounts(t *testing.T) {
+	a, b := testTarget(t, "Alice", 100, "/token-usage/daily"), testTarget(t, "Bob", 200, "")
+	s := serviceFor(t, a, b)
+	failures, found := s.Sync(context.Background(), "")
+	want := []discovery.Failure{{Target: "Alice", Operation: "token-usage/daily", Message: "upstream returned HTTP 503"}}
+	if !found || !reflect.DeepEqual(failures, want) {
+		t.Fatalf("token usage failures: %+v", failures)
+	}
+	if failures, found = s.Sync(context.Background(), "bob"); !found || len(failures) != 0 {
+		t.Fatalf("targeted sync reported other accounts: %+v", failures)
+	}
+}
+
+func TestHistoryIsNotSavedWhenAccountChangesDuringRead(t *testing.T) {
+	var login atomic.Value
+	login.Store("Alice")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/usage":
+			_ = json.NewEncoder(w).Encode(upstream.Usage{Login: login.Load().(string)})
+		case "/token-usage/daily":
+			totals := upstream.Totals{Tokens: 100, Costs: []upstream.Cost{}}
+			_ = json.NewEncoder(w).Encode(upstream.Daily{Summary: upstream.Summary{Period: "lifetime", Totals: &totals, Models: []upstream.Model{}}, Days: []upstream.Day{}})
+			login.Store("Bob")
+		}
+	}))
+	t.Cleanup(srv.Close)
+	c := upstream.New(time.Second, 4)
+	t.Cleanup(c.Close)
+	history := &memoryHistory{}
+	s := &Service{Discovery: staticDiscovery{{Name: "e", URL: srv.URL, Source: "yaml"}}, Upstream: c, History: history}
+	failures, _ := s.Sync(context.Background(), "")
+	want := []discovery.Failure{{Target: "e", Operation: "token-usage/daily", Message: errAccountChanged.Error()}}
+	if history.saveCalls != 0 || !reflect.DeepEqual(failures, want) {
+		t.Fatalf("history read across an account change: saves=%d failures=%+v", history.saveCalls, failures)
+	}
+}
+
+func TestEventsAreConfirmedAfterTheyAreRead(t *testing.T) {
+	var login atomic.Value
+	login.Store("Alice")
+	var armed atomic.Bool
+	switched := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/usage":
+			_ = json.NewEncoder(w).Encode(upstream.Usage{Login: login.Load().(string)})
+			if armed.CompareAndSwap(true, false) {
+				login.Store("Bob")
+				close(switched)
+			}
+		case "/token-usage/events":
+			// An events read that overlaps the confirmation is served after the account changed.
+			select {
+			case <-switched:
+			case <-time.After(100 * time.Millisecond):
+			}
+			_ = json.NewEncoder(w).Encode(upstream.Events{Items: []upstream.Event{{ID: 1, UserID: login.Load().(string)}}, Period: r.URL.Query().Get("period"), Page: 1, PageSize: 20, Total: 1, TotalPages: 1})
+		}
+	}))
+	t.Cleanup(srv.Close)
+	c := upstream.New(time.Second, 4)
+	t.Cleanup(c.Close)
+	s := &Service{Discovery: staticDiscovery{{Name: "e", URL: srv.URL, Source: "yaml"}}, Upstream: c, History: &memoryHistory{hasSnapshot: true}}
+	_, _ = s.Dashboard(context.Background(), "today", "")
+	armed.Store(true)
+	events, status := s.Events(context.Background(), "Alice", "today", 1, 20)
+	if status != 200 || events.Data.Items[0].UserID != "Alice" {
+		t.Fatalf("events read after the confirmation were returned: %d %+v", status, events)
 	}
 }
 
@@ -389,7 +746,7 @@ func TestPersistentDashboardReadsStoredAggregatesWithoutDailyRequest(t *testing.
 	if !found || len(out.Errors) != 0 || out.Data.Totals.Tokens != 300 || out.Data.Accounts[0].Totals.Tokens != 300 || out.Data.Models[0].Tokens != 300 {
 		t.Fatalf("persisted dashboard: %+v", out)
 	}
-	if target.count("/token-usage/daily") != 0 || target.count("/token-usage") != 0 || history.saveCalls != 0 || history.loadCalls != 1 || history.period != "lifetime" {
+	if target.count("/token-usage/daily") != 0 || history.saveCalls != 0 || history.loadCalls != 1 || history.period != "lifetime" {
 		t.Fatalf("unexpected persistence calls: target=%+v history=%+v", target.calls, history)
 	}
 	if _, status := s.Events(context.Background(), "Alice", "today", 2, 1); status != 200 || history.saveCalls != 0 || history.loadCalls != 1 {

@@ -90,11 +90,21 @@ The dashboard looks for `config/account-aliases.yaml`, then `/config/account-ali
 
 The file is read at startup; restart after editing it. Invalid aliases or an explicitly configured missing file prevent startup. Press `d` while the Accounts table is visible to toggle display names. Account selection, URLs, and queries keep using logins.
 
+### Data refresh
+
+The dashboard keeps an in-memory snapshot of the discovered accounts with their plans and quotas. Without persistence, the snapshot also holds token usage for every period. It takes the snapshot at startup, every `COPILOT_API_DASHBOARD_SYNC_INTERVAL`, and when you click Refresh. Page loads and filter changes are served from the snapshot instead of waiting for every Copilot API instance to query GitHub, so the data can be up to about one interval old. The update time is shown above the usage summary.
+
+Copilot API reports an endpoint's account and its token usage through separate requests, so the dashboard confirms the account after reading usage. A snapshot keeps an endpoint's usage only if the endpoint reports the same account after the reads as it did before them: at the end of the previous snapshot or, if that snapshot has no account for the endpoint, in an extra request before the reads. If the account changed, the endpoint is read once more; if it changes again, its usage is reported as unavailable until the next snapshot. After a switch, the dashboard lists the endpoint's new account. Confirming the account adds about one GitHub round trip to Refresh.
+
+Request events are read on each request and returned only if the endpoint still reports the selected account afterwards, which also takes one GitHub round trip. If the endpoint now serves another account, the dashboard takes a new snapshot and reads the events from wherever the account is found.
+
+Changes to the endpoint file or to containers appear in the next snapshot. A failed request stays listed as an error, and its data stays unavailable, until the next snapshot; click Refresh to retry.
+
 ### Usage history
 
-By default, the dashboard reads live data. Set `COPILOT_API_DASHBOARD_PERSISTENCE_ENABLED=true` to keep daily tokens, requests, models, and costs in SQLite. For the binary, set `COPILOT_API_DASHBOARD_DATABASE_PATH` to a writable path such as `./data/dashboard.sqlite`. For Docker, mount `/data`. In Compose, uncomment the persistence settings and the data volume mount.
+By default, token usage comes from the in-memory snapshot (see [Data refresh](#data-refresh)). Set `COPILOT_API_DASHBOARD_PERSISTENCE_ENABLED=true` to keep daily tokens, requests, models, and costs in SQLite instead. For the binary, set `COPILOT_API_DASHBOARD_DATABASE_PATH` to a writable path such as `./data/dashboard.sqlite`. For Docker, mount `/data`. In Compose, uncomment the persistence settings and the data volume mount.
 
-History syncs at startup, every `COPILOT_API_DASHBOARD_SYNC_INTERVAL`, and on Refresh. Dates no longer returned by Copilot API remain stored. Quotas and request events stay live.
+History syncs with each snapshot. After reading an account's usage, the dashboard confirms the account again and does not store the usage if it changed. Dates no longer returned by Copilot API remain stored.
 
 ### Environment variables
 
@@ -111,7 +121,7 @@ History syncs at startup, every `COPILOT_API_DASHBOARD_SYNC_INTERVAL`, and on Re
 | `COPILOT_API_DASHBOARD_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, or `error` |
 | `COPILOT_API_DASHBOARD_PERSISTENCE_ENABLED` | `false` | Store daily usage history in SQLite |
 | `COPILOT_API_DASHBOARD_DATABASE_PATH` | `/data/dashboard.sqlite` | SQLite database file |
-| `COPILOT_API_DASHBOARD_SYNC_INTERVAL` | `10m` | History sync interval |
+| `COPILOT_API_DASHBOARD_SYNC_INTERVAL` | `10m` | Snapshot and history sync interval; see [Data refresh](#data-refresh) |
 
 With `COPILOT_API_DASHBOARD_BASE_PATH=/dashboard`, open `/dashboard/` and configure your reverse proxy to preserve that prefix.
 

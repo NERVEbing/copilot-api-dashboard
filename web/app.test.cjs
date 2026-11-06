@@ -720,6 +720,20 @@ test("an empty account list explains discovery unless data sources failed", () =
   assert.ok(element("accounts").innerHTML.includes("No accounts available."));
 });
 
+test("the update time is shown above the usage summary and includes the date for other days", () => {
+  const { run, element } = app();
+  const today = Date.now(), earlier = today - 3 * 24 * 60 * 60 * 1000;
+  const account = "{login:'account-a',copilot_plan:'business',quota_reset_date:'2026-12-01'}";
+  run(`renderDashboard({accounts:[${account}],updated_at_ms:${today}})`);
+  assert.equal(element("updated").textContent, `Updated ${new Date(today).toLocaleTimeString("en-US")}`);
+  run(`renderDashboard({accounts:[${account}],updated_at_ms:${earlier}})`);
+  assert.equal(element("updated").textContent, `Updated ${new Date(earlier).toLocaleString("en-US")}`);
+  run(`state.account = 'account-a'; renderDashboard({accounts:[${account}],updated_at_ms:${today}})`);
+  assert.equal(element("updated").textContent, `Updated ${new Date(today).toLocaleTimeString("en-US")}`);
+  run("renderDashboard(null)");
+  assert.equal(element("updated").textContent, "");
+});
+
 test("theme button cycles auto, light, and dark, and the head script restores the choice on reload", () => {
   const storage = new Map([["copilot-api-dashboard:theme", "sepia"]]);
   const first = app(undefined, undefined, storage);
